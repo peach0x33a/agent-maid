@@ -83,9 +83,11 @@ func (m SelectModel) View() string {
 		h = 24
 	}
 
-	// 尺寸自适应:优先大图横排,放不下换小图横排,再放不下纵向堆叠
+	// 尺寸自适应:优先大图横排,放不下换小图横排,再放不下纵向堆叠。
+	// 可用宽度要扣掉外框边框(2)与左右内边距(6),否则行尾会折行错位。
+	const boxChrome = 8
 	cols := m.columns(false, m.phase)
-	if totalWidth(cols) > w-4 {
+	if totalWidth(cols) > w-boxChrome {
 		cols = m.columns(true, m.phase)
 	}
 
@@ -93,17 +95,20 @@ func (m SelectModel) View() string {
 	switch {
 	case len(cols) == 1:
 		inner = cols[0]
-	case totalWidth(cols) <= w-4:
+	case totalWidth(cols) <= w-boxChrome:
 		inner = joinHorizontal(cols, "     ")
 	default:
 		inner = joinVertical(cols, "")
 	}
 
-	// 外框:随终端宽度自适应,内容在框内居中,框在终端内居中
+	// 外框:至少容纳内容+内边距(绝不会被折行);宽终端舒展,上限 108
 	contentW := lipgloss.Width(inner)
-	boxW := contentW
-	if w-4 > boxW {
-		boxW = min(w-4, 108)
+	boxW := contentW + 6
+	if maxW := w - 2; boxW > maxW {
+		boxW = maxW
+	}
+	if stretch := w - 6; stretch > boxW {
+		boxW = max(boxW, min(stretch, 108))
 	}
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -220,6 +225,13 @@ func totalWidth(cols []string) int {
 		n += lipgloss.Width(c)
 	}
 	return n
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func min(a, b int) int {
