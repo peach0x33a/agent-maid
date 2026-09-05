@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -16,13 +17,18 @@ const (
 )
 
 // Dir is the base config directory: $AGENT_MAID_DIR, then $XDG_CONFIG_HOME,
-// then ~/.config/agent-maid.
+// then %AppData% (Windows) / ~/.config (Linux & macOS).
 func Dir() string {
 	if d := strings.TrimSpace(os.Getenv("AGENT_MAID_DIR")); d != "" {
 		return d
 	}
 	if base := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); base != "" {
 		return filepath.Join(base, Name)
+	}
+	if runtime.GOOS == "windows" {
+		if appData := os.Getenv("AppData"); appData != "" {
+			return filepath.Join(appData, Name)
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

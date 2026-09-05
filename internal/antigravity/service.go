@@ -16,12 +16,6 @@ type Service struct {
 // New 创建服务。
 func New() *Service { return &Service{Store: NewStore()} }
 
-// Proc 一个检测到的 Antigravity 相关进程。
-type Proc struct {
-	Pid int
-	Cmd string
-}
-
 // CurrentInfo 当前凭据状态。
 type CurrentInfo struct {
 	Exists   bool // oauth_creds.json 是否存在

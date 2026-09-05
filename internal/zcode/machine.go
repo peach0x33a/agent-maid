@@ -6,9 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
+
+	"agent-maid/internal/procscan"
 )
 
 // MachineInfo 描述凭据加密密钥绑定到的环境,以及设备标识。
@@ -44,40 +45,13 @@ func GetMachineInfo() MachineInfo {
 }
 
 // Proc 一个检测到的 ZCode 相关进程。
-type Proc struct {
-	Pid int
-	Cmd string
-}
+type Proc = procscan.Proc
 
 // ZCodeProcs 返回正在运行的 ZCode 相关进程(排除本工具自身)。
 // 覆盖:主进程 ZCode、AppImage(ZCode-*.AppImage)、挂载点内的 zcode 及其
 // Electron 子进程(--type=zygote 等)。
 func ZCodeProcs() []Proc {
-	self := os.Getpid()
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return nil
-	}
-	var out []Proc
-	for _, e := range entries {
-		if !isPid(e.Name()) {
-			continue
-		}
-		pid, err := strconv.Atoi(e.Name())
-		if err != nil || pid == self {
-			continue
-		}
-		cmdline, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
-		if err != nil {
-			continue
-		}
-		argv := strings.FieldsFunc(string(cmdline), func(r rune) bool { return r == 0 })
-		if len(argv) == 0 || !isZcodeProc(argv) {
-			continue
-		}
-		out = append(out, Proc{Pid: pid, Cmd: strings.Join(argv, " ")})
-	}
-	return out
+	return procscan.Find(isZcodeProc)
 }
 
 // isZcodeProc 根据argv判断是否 ZCode 相关进程。
@@ -115,18 +89,6 @@ func WaitZcodeExit(ctx context.Context, interval time.Duration) error {
 		case <-tick.C:
 		}
 	}
-}
-
-func isPid(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // EqualCredentials 判断两份凭据内容是否一致(键值完全相同)。

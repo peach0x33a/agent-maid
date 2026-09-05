@@ -105,6 +105,18 @@ internal/atomicio/         临时文件 + rename 的原子写入
 - 保存/切换的是 `~/.gemini/` 下两个文件的原文快照:`oauth_creds.json`(0600)与 `google_accounts.json`;槽位标签(邮箱)自动从 `id_token` JWT 解析。
 - Antigravity 正在运行时会提示:切换后建议尽快重启 Antigravity,避免运行中的凭据回写覆盖。
 
+## 平台支持
+
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| 编译 | ✓ | ✓ (amd64/arm64) | ✓ (amd64/arm64) |
+| TUI / 切换功能 | ✓ | ✓ | ✓ |
+| 配置目录 | `~/.config/agent-maid` | `~/.config/agent-maid` | `%AppData%\agent-maid` |
+| 运行检测(/proc、ps、tasklist) | ✓ | 尽力而为¹ | ✓ |
+| ZCode「等待退出后切换」 | ✓ | 同左(依赖进程检测) | 同左(依赖进程检测) |
+
+¹ macOS 通过 `ps` 还原 argv 属尽力而为,不保证兼容性。Windows 上文件权限位(0600)不映射 NTFS ACL,建议把配置目录放在受保护的账户下;TUI 建议在 Windows Terminal 中运行。
+
 ## 接入新工具
 
 工具的凭据管理逻辑放独立的 internal 包(如 `gptauth`/`zcodeapp`),TUI 层实现

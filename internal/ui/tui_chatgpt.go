@@ -64,6 +64,7 @@ type ChatgptModel struct {
 	activeID string
 	current  *gptauth.Current
 	home     string
+	codexRun bool
 
 	cursor int
 
@@ -95,6 +96,7 @@ type cLoadedMsg struct {
 	activeID string
 	current  *gptauth.Current
 	home     string
+	codexRun bool
 	err      error
 }
 
@@ -111,7 +113,7 @@ func (m ChatgptModel) refresh() tea.Msg {
 	if err != nil {
 		return cLoadedMsg{err: err, home: home}
 	}
-	return cLoadedMsg{accounts: st.Data.Accounts, activeID: st.Data.ActiveID, current: current, home: home}
+	return cLoadedMsg{accounts: st.Data.Accounts, activeID: st.Data.ActiveID, current: current, home: home, codexRun: gptauth.CodexRunning()}
 }
 
 func (m *ChatgptModel) applyLoaded(lm cLoadedMsg) {
@@ -120,6 +122,7 @@ func (m *ChatgptModel) applyLoaded(lm cLoadedMsg) {
 	m.accounts = lm.accounts
 	m.activeID = lm.activeID
 	m.current = lm.current
+	m.codexRun = lm.codexRun
 	m.clampCursor()
 }
 
@@ -664,6 +667,10 @@ func (m ChatgptModel) View() string {
 	b.WriteString("\n")
 	b.WriteString(m.currentLine())
 	b.WriteString("\n")
+	if m.codexRun {
+		b.WriteString(styleWarn.Render("⚠ Codex 正在运行:切换后建议尽快重启 Codex,避免运行中的凭据回写覆盖"))
+		b.WriteString("\n")
+	}
 	b.WriteString(m.section(fmt.Sprintf("账号库(共 %d 个) · %s", len(m.accounts), gptstore.DefaultPath())))
 	b.WriteString("\n")
 
@@ -752,6 +759,10 @@ func (m ChatgptModel) infoView() string {
 	if codexHome == "" {
 		codexHome = "~/.codex"
 	}
+	codexState := styleDim.Render("未检测到")
+	if gptauth.CodexRunning() {
+		codexState = accentSt.Render("正在运行")
+	}
 	return strings.Join([]string{
 		styleTitle.Render("信息"),
 		styleDim.Render("官方目录:  ") + val.Render(orDash(m.home)),
@@ -759,6 +770,7 @@ func (m ChatgptModel) infoView() string {
 		styleDim.Render("当前凭据:  ") + current,
 		styleDim.Render("账号库:    ") + val.Render(gptstore.DefaultPath()) +
 			accentSt.Render(fmt.Sprintf("  %d 个账号", len(m.accounts))),
+		styleDim.Render("Codex:     ") + codexState,
 		styleDim.Render("CODEX_HOME:") + val.Render(codexHome),
 		"",
 		styleDim.Render("按任意键返回"),
