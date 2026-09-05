@@ -8,12 +8,27 @@ import (
 )
 
 // SpawnWaitZcode 派生后台进程,等待 ZCode 完全退出后切换到指定槽位。
-func SpawnWaitZcode(slot string) error {
+// relaunchPath 非空时,替换完成后自动重新启动 ZCode。
+func SpawnWaitZcode(slot, relaunchPath string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(exe, "--wait-apply", "zcode", slot)
+	args := []string{"--wait-apply", "zcode", slot}
+	if relaunchPath != "" {
+		args = append(args, relaunchPath)
+	}
+	cmd := exec.Command(exe, args...)
+	detach(cmd)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
+// Launch 以脱离会话的方式启动外部程序(用于替换完成后自动重启软件)。
+func Launch(path string, args ...string) error {
+	cmd := exec.Command(path, args...)
 	detach(cmd)
 	if err := cmd.Start(); err != nil {
 		return err

@@ -41,6 +41,16 @@ func WriteCredentials(creds Credentials) error {
 	return atomicWrite(CredentialsPath(), data, 0o600)
 }
 
+// ClearCredentials 删除本地 credentials.json(仅本地登出,
+// 不吊销服务端令牌);文件不存在时静默。
+func ClearCredentials() error {
+	err := os.Remove(CredentialsPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 // CredentialsExists 判断 credentials.json 是否存在。
 func CredentialsExists() bool {
 	_, err := os.Stat(CredentialsPath())

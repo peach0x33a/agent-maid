@@ -32,6 +32,7 @@ func NewRoot(pre string) RootModel {
 	registry := newRegistry()
 	settings := meta.LoadSettings()
 	plainMode = settings.Plain
+	autoRelaunch = settings.RelaunchEnabled()
 	m := RootModel{
 		screen:   screenSelect,
 		registry: registry,
@@ -70,6 +71,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case wizardDoneMsg:
 		_ = meta.SaveSettings(msg.settings)
 		plainMode = msg.settings.Plain
+		autoRelaunch = msg.settings.RelaunchEnabled()
 		if m.pre != "" {
 			for _, mgr := range m.registry {
 				if mgr.Info().Key == m.pre {

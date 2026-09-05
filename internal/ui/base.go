@@ -92,16 +92,19 @@ func chipBar(chips []chip, sel int, accent lipgloss.Color) string {
 // statusTickMsg 提示/确认框摇晃动画与提示超时的节拍。
 type statusTickMsg struct{}
 
-// shakeOffsets 水平摇晃偏移序列(钟摆式,单位字符)。
-var shakeOffsets = [8]int{2, 3, 4, 3, 2, 1, 0, 1}
+// shakeOffsets 水平摇晃偏移序列:衰减钟摆,摇完一轮回到原位后静止。
+var shakeOffsets = [8]int{3, 4, 3, 2, 1, 2, 1, 0}
 
 func statusTick() tea.Cmd {
 	return tea.Tick(110*time.Millisecond, func(time.Time) tea.Msg { return statusTickMsg{} })
 }
 
-// shakePrefix 按帧序号返回摇晃缩进。
+// shakePrefix 按帧序号返回摇晃缩进;序列播完即静止(不再持续跳动)。
 func shakePrefix(frame int) string {
-	return strings.Repeat(" ", shakeOffsets[frame%len(shakeOffsets)])
+	if frame >= len(shakeOffsets) {
+		return ""
+	}
+	return strings.Repeat(" ", shakeOffsets[frame])
 }
 
 // banner 子界面顶部持续显示的标题行(分隔线见 header)。
@@ -146,12 +149,37 @@ type baseModel struct {
 	deleteArm  bool      // 已按过一次 d,等待再次确认
 	deleteName string    // 待删除项的标识(槽位名/账号 ID)
 	deleteAt   time.Time // 进入待确认的时刻(超时自动撤下)
+	switchArm  bool      // 已按过一次 enter,等待再次确认切换
+	switchName string    // 待切换项的标识
 	quitArm    bool      // 已按过一次 q,等待再次确认退出
 	quitAt     time.Time // 首次按下 q 的时刻(0.5s 内的第二次按下无效)
 }
 
 // quitArmDelay 第二次 Q 需距首次至少 0.5s 才生效(防误触连按)。
 const quitArmDelay = 500 * time.Millisecond
+
+// autoRelaunch 替换完成后自动打开/重启对应软件(向导偏好,默认开启)。
+var autoRelaunch = true
+
+// armSwitch 进入"再按一次 Enter 确认切换"状态(提示显示在选中行徽章位置)。
+func (b *baseModel) armSwitch(name string) {
+	b.switchArm = true
+	b.switchName = name
+}
+
+// confirmSwitch 第二次 Enter:结束待确认态并返回是否确实处于待确认。
+func (b *baseModel) confirmSwitch() bool {
+	armed := b.switchArm
+	b.switchArm = false
+	return armed
+}
+
+// confirmBadge 切换确认提示,渲染在"使用中"徽章的位置。
+func confirmBadge(info *targetInfo) string {
+	return lipgloss.NewStyle().Bold(true).
+		Foreground(lipgloss.Color("#15151E")).Background(info.accent).
+		Render(" 再按一次 Enter 确认切换 ")
+}
 
 // handleQuitKey 处理 q/Q:首次按下给出反选高亮提示;第二次按下须间隔
 // 0.5s 以上才真正退出;期间按其他键自动取消。
@@ -202,6 +230,7 @@ func (b *baseModel) setStatus(err error, okText, errPrefix string) {
 func (b *baseModel) clearPrompt() {
 	b.deleteArm = false
 	b.quitArm = false
+	b.switchArm = false
 	if b.status.kind == 4 || b.status.kind == 5 {
 		b.status = status{}
 	}
@@ -215,6 +244,7 @@ func (b *baseModel) armPrompt(name, text string) tea.Cmd {
 	b.deleteName = name
 	b.deleteAt = time.Now()
 	b.quitArm = false
+	b.shakeFrame = 0 // 重新武装时重新摇晃
 	b.status = status{4, text}
 	if !wasArmed {
 		return statusTick()

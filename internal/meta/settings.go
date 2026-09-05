@@ -16,7 +16,13 @@ type Settings struct {
 	Truecolor bool `json:"truecolor"` // 向导:终端支持渐变色
 	Symbols   bool `json:"symbols"`   // 向导:终端支持半块/制表等特殊符号
 	Plain     bool `json:"plain"`     // 符号不受支持:启用纯文本降级(无块状图标、ASCII spinner)
+	// AutoRelaunch 替换完成后自动打开/重启对应软件;未设置(旧配置文件)
+	// 时视为开启。
+	AutoRelaunch *bool `json:"auto_relaunch,omitempty"`
 }
+
+// RelaunchEnabled 报告是否自动重启。
+func (s Settings) RelaunchEnabled() bool { return s.AutoRelaunch == nil || *s.AutoRelaunch }
 
 // SettingsPath 返回设置文件路径。
 func SettingsPath() string { return filepath.Join(Dir(), "settings.json") }

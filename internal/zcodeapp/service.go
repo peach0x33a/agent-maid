@@ -103,6 +103,37 @@ func (s *Service) Apply(name string) (autoBackup string, err error) {
 	return autoBackup, nil
 }
 
+// CurrentCovered 报告当前凭据是否已被某个槽位覆盖(已保存)。
+func (s *Service) CurrentCovered() bool {
+	current, err := zcode.ReadCredentials()
+	return err == nil && s.currentCovered(current)
+}
+
+// BackupCurrentIfUncovered 当前凭据未被任何槽位覆盖时,自动备份到
+// auto-<时间戳> 槽位。返回备份槽位名(未备份为空)。
+func (s *Service) BackupCurrentIfUncovered() (string, error) {
+	current, err := zcode.ReadCredentials()
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if s.currentCovered(current) {
+		return "", nil
+	}
+	name := fmt.Sprintf("auto-%s", time.Now().Format("0102-150405"))
+	key := zcode.DeriveKey(zcode.CredentialSecret())
+	if _, err := s.Store.Save(name, zcodestore.Slot{
+		KeyFingerprint: zcode.KeyFingerprint(key),
+		Meta:           current.ExtractMeta(key),
+		Credentials:    current,
+	}); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
 // currentCovered 判断当前凭据是否与某个槽位完全一致(即不会因切换而丢失)。
 func (s *Service) currentCovered(current zcode.Credentials) bool {
 	slots, err := s.Store.List()

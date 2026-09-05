@@ -81,6 +81,16 @@ func WriteAuthFile(home string, data []byte) (backup string, changed bool, err e
 	return backup, true, nil
 }
 
+// ClearAuthFile 删除 auth.json(仅本地登出,不吊销服务端令牌);
+// 文件不存在时静默。
+func ClearAuthFile(home string) error {
+	err := os.Remove(AuthFilePath(home))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 func pruneBackups(home string) {
 	matches, err := filepath.Glob(filepath.Join(home, "auth.json.bak-*"))
 	if err != nil || len(matches) <= backupKeep {

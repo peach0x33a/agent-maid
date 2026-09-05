@@ -32,3 +32,22 @@ func isAntigravityProc(argv []string) bool {
 
 // Running 是否有 Antigravity 进程在运行。
 func Running() bool { return len(Procs()) > 0 }
+
+// LaunchCmd 从运行中的进程里推断适合重新启动 Antigravity 的命令
+// (Electron 主进程没有 --type= 参数);未检测到时返回空串。
+func LaunchCmd() string {
+	for _, p := range Procs() {
+		argv := strings.Fields(p.Cmd)
+		main := true
+		for _, a := range argv[1:] {
+			if strings.HasPrefix(a, "--type=") {
+				main = false
+				break
+			}
+		}
+		if main {
+			return argv[0]
+		}
+	}
+	return ""
+}

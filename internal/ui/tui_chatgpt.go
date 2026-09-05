@@ -6,7 +6,9 @@ package ui
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -44,15 +46,10 @@ var cChips = []chip{
 	{"i", "导入"},
 	{"r", "重命名"},
 	{"d", "删除"},
+	{"N", "登出"},
 	{"m", "信息"},
 	{"?", "帮助"},
 }
-
-type cconfirm int
-
-const (
-	cconfirmActivate cconfirm = iota
-)
 
 type ChatgptModel struct {
 	baseModel
@@ -69,9 +66,6 @@ type ChatgptModel struct {
 
 	input    textinput.Model
 	inputFor inputPurpose
-
-	confirm   cconfirm
-	confirmID string
 }
 
 // NewChatgpt 创建 ChatGPT 管理器。
@@ -163,8 +157,6 @@ func (m ChatgptModel) Update(msg tea.Msg) (Manager, tea.Cmd) {
 	switch m.mode {
 	case modeInput:
 		return m.updateInput(msg)
-	case modeConfirm:
-		return m.updateConfirm(msg)
 	case modeHelp, modeDetail, modeMachine:
 		if _, ok := msg.(tea.KeyMsg); ok {
 			m.mode = modeNormal
@@ -266,26 +258,67 @@ func (m ChatgptModel) dispatch(key string) (Manager, tea.Cmd) {
 		}
 		cmd := m.armPrompt(sel.ID, fmt.Sprintf("再按一次 d 删除账号 %q", sel.Label))
 		return m, cmd
+	case "N": // 登出:清空本地 auth.json(账号保留在账号库)
+		if m.current == nil {
+			m.status = status{2, "当前未登录,无需登出"}
+			return m, nil
+		}
+		if m.deleteArm && m.deleteName == "N" {
+			m.clearPrompt()
+			if _, err := m.saveCurrent(""); err != nil {
+				m.status = status{2, "保存当前凭据失败: " + err.Error()}
+				return m, nil
+			}
+			if err := gptauth.ClearAuthFile(m.home); err != nil {
+				m.status = status{2, "清空凭据失败: " + err.Error()}
+				return m, nil
+			}
+			m.status = status{1, "已登出 Codex(账号已保留在账号库),重新登录后按 s 保存"}
+			return m, func() tea.Msg { return cRefreshMsg{} }
+		}
+		var text string
+		if m.currentInLibrary() {
+			text = "再按一次 N 清空凭据并登出(账号已保留在账号库,令牌不会被吊销)"
+		} else {
+			text = "⚠ 当前凭据尚未保存到账号库,再按一次 N 登出(将自动存入账号库)"
+		}
+		cmd := m.armPrompt("N", text)
+		return m, cmd
 	case "m":
 		m.clearPrompt()
 		m.mode = modeMachine
 	case "?", "h":
 		m.clearPrompt()
 		m.mode = modeHelp
-	case "enter": // 激活选中账号
+	case "enter": // 激活:再按一次 Enter 确认(提示在徽章位置)
 		sel := m.selected()
 		if sel == nil {
 			return m, nil
 		}
-		m.clearPrompt()
-		m.confirm = cconfirmActivate
-		m.confirmID = sel.ID
-		m.mode = modeConfirm
-		return m, statusTick() // 确认框按键行摇晃
+		if m.confirmSwitch() {
+			text, err := m.doActivate(sel.ID)
+			m.setStatus(err, text, "激活失败")
+			return m, func() tea.Msg { return cRefreshMsg{} }
+		}
+		m.armSwitch(sel.ID)
+		return m, nil
 	default:
 		m.clearPrompt()
 	}
 	return m, nil
+}
+
+// currentInLibrary 当前 auth.json 的账号是否已存在于账号库。
+func (m ChatgptModel) currentInLibrary() bool {
+	if m.current == nil || m.current.AccountID == "" {
+		return false
+	}
+	for _, a := range m.accounts {
+		if a.AccountID == m.current.AccountID {
+			return true
+		}
+	}
+	return false
 }
 
 // currentLabel 当前 auth.json 凭据的默认显示名。
@@ -337,27 +370,6 @@ func (m ChatgptModel) updateInput(msg tea.Msg) (Manager, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
-}
-
-func (m ChatgptModel) updateConfirm(msg tea.Msg) (Manager, tea.Cmd) {
-	key, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return m, nil
-	}
-	switch key.String() {
-	case "n", "esc", "q", "Q":
-		m.mode = modeNormal
-		return m, nil
-	case "y", "enter":
-		switch m.confirm {
-		case cconfirmActivate:
-			text, err := m.doActivate(m.confirmID)
-			m.setStatus(err, text, "激活失败")
-			m.mode = modeNormal
-			return m, func() tea.Msg { return cRefreshMsg{} }
-		}
-	}
-	return m, nil
 }
 
 // saveCurrent 把官方 auth.json 里当前生效的凭据存入账号库。
@@ -464,11 +476,19 @@ func (m *ChatgptModel) importAccounts(raw string) status {
 	if len(data) == 0 {
 		return status{2, "输入为空"}
 	}
-	var doc any
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return status{2, "输入不是合法 JSON: " + err.Error()}
+	docs, badDocs, perr := parseJSONDocs(data)
+	if perr != nil {
+		return status{2, "输入不是合法 JSON: " + perr.Error()}
 	}
-	records := gptsession.Collect(doc, src)
+	// 多段文档(JSONL/拼接)时,来源名附带序号便于追溯
+	var records []gptsession.Record
+	for i, doc := range docs {
+		name := src
+		if len(docs) > 1 {
+			name = fmt.Sprintf("%s#%d", src, i+1)
+		}
+		records = append(records, gptsession.Collect(doc, name)...)
+	}
 	if len(records) == 0 {
 		return status{2, "未在输入中找到包含 access_token 的会话/账号对象(支持 WebSession 与 sub2api 导出)"}
 	}
@@ -494,15 +514,26 @@ func (m *ChatgptModel) importAccounts(raw string) status {
 		imported++
 	}
 	if imported == 0 {
-		return status{2, fmt.Sprintf("全部 %d 项均无法转换", len(records))}
+		msg := fmt.Sprintf("全部 %d 项均无法转换", len(records))
+		if badDocs > 0 {
+			msg += fmt.Sprintf("(另有 %d 个无效文档)", badDocs)
+		}
+		return status{2, msg}
 	}
 	if err := st.Save(); err != nil {
 		return status{2, "保存账号库失败: " + err.Error()}
 	}
-	if imported == 1 {
-		return status{1, fmt.Sprintf("已导入 %s(跳过 %d 项),Enter 激活并写入官方目录", first, skipped)}
+	tail := ""
+	if skipped > 0 {
+		tail += fmt.Sprintf(",跳过 %d 项", skipped)
 	}
-	return status{1, fmt.Sprintf("已导入 %d 个账号(跳过 %d 项),选中后按 Enter 激活", imported, skipped)}
+	if badDocs > 0 {
+		tail += fmt.Sprintf(",忽略 %d 个无效文档", badDocs)
+	}
+	if imported == 1 {
+		return status{1, fmt.Sprintf("已导入 %s%s,Enter 激活并写入官方目录", first, tail)}
+	}
+	return status{1, fmt.Sprintf("已导入 %d 个账号%s,选中后按 Enter 激活", imported, tail)}
 }
 
 // doActivate 把账号投影为官方 auth.json(保序合并、备份、原子写入)。
@@ -540,7 +571,7 @@ func (m *ChatgptModel) doActivate(id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	text := "已激活 " + acc.Label + ",写入 " + gptauth.AuthFilePath(home)
+	text := "已激活 " + acc.Label + ",已写入 Codex 凭据(" + gptauth.AuthFilePath(home) + ")"
 	if backup != "" {
 		text += "(原凭据备份: " + filepath.Base(backup) + ")"
 	}
@@ -558,6 +589,43 @@ func (m *ChatgptModel) doRemove(id string) error {
 		return fmt.Errorf("在账号库中找不到 %q", id)
 	}
 	return st.Save()
+}
+
+// parseJSONDocs 解析导入输入,尽量宽容:
+//  1. 连续多段 JSON —— 单个对象/数组、CPA、sub2api 整包、拼接 JSON 均可;
+//  2. JSONL(每行一个 JSON 对象,常见于批量导出);
+//  3. 上述失败时退回逐行解析,跳过无效行并计数。
+//
+// 返回解析出的文档列表与被忽略的无效文档数。
+func parseJSONDocs(data []byte) (docs []any, badDocs int, err error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	for {
+		var v any
+		if derr := dec.Decode(&v); derr != nil {
+			if errors.Is(derr, io.EOF) {
+				return docs, 0, nil
+			}
+			break // 语法错误:退回逐行解析
+		}
+		docs = append(docs, v)
+	}
+	docs = nil
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var v any
+		if json.Unmarshal([]byte(line), &v) == nil {
+			docs = append(docs, v)
+		} else {
+			badDocs++
+		}
+	}
+	if len(docs) == 0 {
+		return nil, badDocs, errors.New("未能解析出任何 JSON 文档")
+	}
+	return docs, badDocs, nil
 }
 
 func expandHome(p string) string {
@@ -639,7 +707,10 @@ func (m ChatgptModel) accountRow(i int) string {
 		name = name[:30]
 	}
 	mark := ""
-	if inUse {
+	switch {
+	case m.switchArm && m.switchName == a.ID && i == m.cursor:
+		mark = " " + confirmBadge(&cinfo)
+	case inUse:
 		mark = " " + badgeInUse()
 	}
 	warn := ""
@@ -701,15 +772,6 @@ func (m ChatgptModel) View() string {
 			purpose = "重命名账号"
 		}
 		b.WriteString("\n" + styleBox.Render(purpose+"\n"+m.input.View()) + "\n")
-	case modeConfirm:
-		acc := m.findByID(m.confirmID)
-		label := m.confirmID
-		if acc != nil {
-			label = acc.Label
-		}
-		text := fmt.Sprintf("将把账号 %s 投影为官方 auth.json(%s)。\n原文件自动备份为 auth.json.bak-<时间戳>。继续?", label, orDash(m.home))
-		keys := "[y] 确认  [n] 取消"
-		b.WriteString(m.confirmBox(text, keys))
 	case modeDetail:
 		if sel := m.selected(); sel != nil {
 			b.WriteString("\n" + styleBox.Render(m.detailView(sel)) + "\n")
@@ -822,7 +884,7 @@ func cHelpView() string {
 		styleTitle.Render("按键说明(ChatGPT 账号切换器)"),
 		"j/k 或 ↑/↓   移动光标",
 		"←/→          在底部操作栏中选择操作,回车执行",
-		"enter        激活选中账号:写入官方 auth.json,原文件自动备份",
+		"enter        激活选中账号(再按一次 Enter 确认):写入 Codex 的凭据,原文件自动备份",
 		"i            导入会话凭据 JSON(WebSession / sub2api),",
 		styleDim.Render("             输入文件路径,或直接把 JSON 粘贴进输入框;导入只入库,不自动激活"),
 		"s            保存当前 auth.json 凭据到账号库(输入显示名)",

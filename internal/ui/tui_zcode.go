@@ -38,6 +38,7 @@ var zChips = []chip{
 	{"S", "快存"},
 	{"r", "重命名"},
 	{"d", "删除"},
+	{"N", "登出"},
 	{"m", "机器信息"},
 	{"?", "帮助"},
 }
@@ -45,8 +46,7 @@ var zChips = []chip{
 type zconfirm int
 
 const (
-	zconfirmApply zconfirm = iota
-	zconfirmOverwriteSave
+	zconfirmOverwriteSave zconfirm = iota
 )
 
 type ZcodeModel struct {
@@ -65,10 +65,11 @@ type ZcodeModel struct {
 	confirm   zconfirm
 	confirmTx string // 确认附带的上下文(槽位名)
 
-	waitingFor string
-	waitProcs  []zcode.Proc
-	waitStart  time.Time
-	spin       int // 等待界面 spinner 帧序号
+	waitingFor   string
+	waitProcs    []zcode.Proc
+	waitStart    time.Time
+	spin         int    // 等待界面 spinner 帧序号
+	relaunchPath string // 检测到的 ZCode 启动路径(替换成功后自动重启用)
 }
 
 // NewZcode 创建 ZCode 管理器。
@@ -109,9 +110,10 @@ func zcodeAccountLabel(meta zcode.AccountMeta) string {
 // ───────────────────────── 数据 ─────────────────────────
 
 type zLoadedMsg struct {
-	slots    []zcodestore.Slot
-	current  zcodeapp.CurrentInfo
-	zcodeRun bool
+	slots     []zcodestore.Slot
+	current   zcodeapp.CurrentInfo
+	zcodeRun  bool
+	launchCmd string
 }
 
 // waitTickMsg 等待 ZCode 退出的轮询节拍(兼作 spinner 动画帧)。
@@ -151,13 +153,15 @@ func (m ZcodeModel) applyCmd(name string, waited, forced bool) tea.Cmd {
 func (m ZcodeModel) refresh() tea.Msg {
 	slots, _ := m.svc.Store.List()
 	current := m.svc.Current()
-	return zLoadedMsg{slots: slots, current: current, zcodeRun: zcode.ZCodeRunning()}
+	procs := zcode.ZCodeProcs()
+	return zLoadedMsg{slots: slots, current: current, zcodeRun: len(procs) > 0, launchCmd: zcode.LaunchCmd()}
 }
 
 func (m *ZcodeModel) applyLoaded(lm zLoadedMsg) {
 	m.slots = lm.slots
 	m.current = lm.current
 	m.zcodeRun = lm.zcodeRun
+	m.relaunchPath = lm.launchCmd
 	m.clampCursor()
 }
 
@@ -235,9 +239,11 @@ func (m ZcodeModel) Update(msg tea.Msg) (Manager, tea.Cmd) {
 // handleApplyResult 统一呈现切换结果。
 func (m ZcodeModel) handleApplyResult(msg zApplyResultMsg) (Manager, tea.Cmd) {
 	m.mode = modeNormal
+	relaunched := false
 	switch {
 	case msg.err != nil:
 		m.status = status{2, msg.err.Error()}
+		return m, func() tea.Msg { return zRefreshMsg{} }
 	case msg.forced:
 		text := fmt.Sprintf("已无视风险立即切换到槽位 %q", msg.name)
 		if msg.backup != "" {
@@ -250,15 +256,29 @@ func (m ZcodeModel) handleApplyResult(msg zApplyResultMsg) (Manager, tea.Cmd) {
 		if msg.backup != "" {
 			text += "(原账号已自动备份到 " + msg.backup + ")"
 		}
+		text += m.relaunchSuffix(&relaunched)
 		m.status = status{1, text}
 	default:
 		text := "已切换到槽位 " + msg.name
 		if msg.backup != "" {
 			text += "(原账号已自动备份到 " + msg.backup + ")"
 		}
+		text += m.relaunchSuffix(&relaunched)
 		m.status = status{1, text}
 	}
 	return m, func() tea.Msg { return zRefreshMsg{} }
+}
+
+// relaunchSuffix 按偏好自动重启 ZCode,返回状态后缀。
+func (m ZcodeModel) relaunchSuffix(relaunched *bool) string {
+	if !autoRelaunch || m.relaunchPath == "" {
+		return ""
+	}
+	if err := background.Launch(m.relaunchPath); err != nil {
+		return styleWarn.Render("(自动重启 ZCode 失败: " + err.Error() + ")")
+	}
+	*relaunched = true
+	return styleOk.Render(",已启动 ZCode")
 }
 
 func (m ZcodeModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
@@ -355,22 +375,66 @@ func (m ZcodeModel) dispatch(key string) (Manager, tea.Cmd) {
 		}
 		cmd := m.armPrompt(sel.Name, fmt.Sprintf("再按一次 d 删除槽位 %q", sel.Name))
 		return m, cmd
+	case "N": // 登出:清空本地凭据(自动备份),让 ZCode 回到未登录态
+		if !m.current.Exists {
+			m.status = status{2, "当前没有登录凭据,无需登出"}
+			return m, nil
+		}
+		if m.deleteArm && m.deleteName == "N" {
+			m.clearPrompt()
+			backup, err := m.svc.BackupCurrentIfUncovered()
+			if err != nil {
+				m.status = status{2, "自动备份失败: " + err.Error()}
+				return m, nil
+			}
+			if err := zcode.ClearCredentials(); err != nil {
+				m.status = status{2, "清空凭据失败: " + err.Error()}
+				return m, nil
+			}
+			text := "已清空本地凭据,可重新登录后按 s 保存新账号"
+			if backup != "" {
+				text = "已清空本地凭据(原账号已自动备份到 " + backup + "),可重新登录后按 s 保存"
+			}
+			if autoRelaunch && m.relaunchPath != "" {
+				if lerr := background.Launch(m.relaunchPath); lerr == nil {
+					text += styleOk.Render(",已启动 ZCode")
+				}
+			}
+			m.status = status{1, text}
+			return m, func() tea.Msg { return zRefreshMsg{} }
+		}
+		var text string
+		if m.svc.CurrentCovered() {
+			text = "再按一次 N 清空凭据并登出(当前账号已保存在槽位,令牌不会被吊销)"
+		} else {
+			text = "⚠ 当前凭据尚未保存到槽位,再按一次 N 登出(将自动备份到 auto-<时间戳> 槽位)"
+		}
+		cmd := m.armPrompt("N", text)
+		return m, cmd
 	case "m":
 		m.clearPrompt()
 		m.mode = modeMachine
 	case "?", "h":
 		m.clearPrompt()
 		m.mode = modeHelp
-	case "enter": // 应用选中槽位
+	case "enter": // 切换:再按一次 Enter 确认(提示在徽章位置)
 		sel := m.selected()
 		if sel == nil {
 			return m, nil
 		}
-		m.clearPrompt()
-		m.confirm = zconfirmApply
-		m.confirmTx = sel.Name
-		m.mode = modeConfirm
-		return m, statusTick() // 确认框按键行摇晃
+		if !m.confirmSwitch() {
+			m.armSwitch(sel.Name)
+			return m, nil
+		}
+		if m.zcodeRun {
+			// 默认路径:等待 ZCode 完全退出后再执行替换
+			m.waitingFor = sel.Name
+			m.waitProcs = zcode.ZCodeProcs()
+			m.waitStart = time.Now()
+			m.mode = modeWaiting
+			return m, waitTick()
+		}
+		return m, m.applyCmd(sel.Name, false, false)
 	default:
 		m.clearPrompt()
 	}
@@ -436,26 +500,11 @@ func (m ZcodeModel) updateConfirm(msg tea.Msg) (Manager, tea.Cmd) {
 		return m, nil
 	case "y", "enter":
 		switch m.confirm {
-		case zconfirmApply:
-			if m.zcodeRun {
-				// 默认路径:等待 ZCode 完全退出后再执行替换
-				m.waitingFor = m.confirmTx
-				m.waitProcs = zcode.ZCodeProcs()
-				m.waitStart = time.Now()
-				m.mode = modeWaiting
-				return m, waitTick()
-			}
-			return m, m.applyCmd(m.confirmTx, false, false)
 		case zconfirmOverwriteSave:
 			slot, err := m.svc.SaveCurrent(m.confirmTx, true)
 			m.setStatus(err, "已覆盖保存到槽位 "+describeSlot(slot), "保存失败")
 			m.mode = modeNormal
 			return m, func() tea.Msg { return zRefreshMsg{} }
-		}
-	case "f":
-		// 无视风险:立即替换,不等 ZCode 退出
-		if m.confirm == zconfirmApply && m.zcodeRun {
-			return m, m.applyCmd(m.confirmTx, false, true)
 		}
 	}
 	return m, nil
@@ -485,7 +534,7 @@ func (m ZcodeModel) updateWaiting(msg tea.Msg) (Manager, tea.Cmd) {
 		return m, nil
 	case "c":
 		// 关闭本工具,派生后台进程继续等待 ZCode 退出并完成切换
-		if err := background.SpawnWaitZcode(m.waitingFor); err != nil {
+		if err := background.SpawnWaitZcode(m.waitingFor, m.relaunchPath); err != nil {
 			m.status = status{2, "后台任务启动失败: " + err.Error()}
 			return m, nil
 		}
@@ -563,7 +612,10 @@ func (m ZcodeModel) slotRow(i int) string {
 		name = name[:24]
 	}
 	mark := ""
-	if inUse {
+	switch {
+	case m.switchArm && m.switchName == slot.Name && i == m.cursor:
+		mark = " " + confirmBadge(&zinfo)
+	case inUse:
 		mark = " " + badgeInUse()
 	}
 	warn := ""
@@ -613,15 +665,6 @@ func (m ZcodeModel) View() string {
 		var text string
 		var keys string
 		switch m.confirm {
-		case zconfirmApply:
-			if m.zcodeRun {
-				text = fmt.Sprintf("将切换到槽位 %q,并写入 credentials.json。\n⚠ ZCode 正在运行(PID %s):运行中替换可能被其退出前的凭据回写覆盖。",
-					m.confirmTx, m.pidList())
-				keys = "[y] 等待 ZCode 完全退出后自动切换(推荐)  [f] 立即替换(无视风险)  [n] 取消"
-			} else {
-				text = fmt.Sprintf("将切换到槽位 %q,并写入 credentials.json。继续?", m.confirmTx)
-				keys = "[y] 确认  [n] 取消"
-			}
 		case zconfirmOverwriteSave:
 			text = fmt.Sprintf("槽位 %q 已存在,覆盖?", m.confirmTx)
 			keys = "[y] 确认  [n] 取消"
@@ -632,7 +675,7 @@ func (m ZcodeModel) View() string {
 		spin := styleSel.Render(spinFrames()[m.spin%len(spinFrames())])
 		lines := []string{
 			styleTitle.Render(fmt.Sprintf("%s 等待 ZCode 完全退出…(已等待 %v)", spin, elapsed)),
-			fmt.Sprintf("ZCode 退出后将自动切换到槽位 %q 并写入 credentials.json。", m.waitingFor),
+			fmt.Sprintf("ZCode 退出后将自动切换到槽位 %q 并写入 ZCode 的凭据。", m.waitingFor),
 			"",
 			styleDim.Render("运行中的 ZCode 进程:"),
 		}
@@ -683,7 +726,7 @@ func zHelpView() string {
 		styleTitle.Render("按键说明(ZCode 账号切换器)"),
 		"j/k 或 ↑/↓   移动光标",
 		"←/→          在底部操作栏中选择操作,回车执行",
-		"enter        应用选中槽位(切换账号,自动备份未覆盖的当前账号)",
+		"enter        切换到选中槽位(再按一次 Enter 确认;自动备份未覆盖的当前账号,按偏好自动重启)",
 		styleDim.Render("             ZCode 运行中时,默认等待其完全退出后自动切换;"),
 		styleDim.Render("             确认/等待界面按 f 可无视风险立即替换。"),
 		"s            保存当前账号到新槽位(默认填充账号名,可编辑)",

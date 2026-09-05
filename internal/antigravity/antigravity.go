@@ -92,6 +92,16 @@ func WriteAccounts(accounts Accounts) error {
 	return atomicio.WriteFile(AccountsPath(), data, 0o644)
 }
 
+// ClearCreds 删除 oauth_creds.json(仅本地登出,不吊销服务端令牌);
+// 文件不存在时静默。
+func ClearCreds() error {
+	err := os.Remove(OAuthCredsPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 // ActiveAccount 取 google_accounts.json 里的 active 邮箱。
 func (a Accounts) ActiveAccount() string {
 	if a == nil {

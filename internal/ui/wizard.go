@@ -17,10 +17,12 @@ type wizardDoneMsg struct{ settings meta.Settings }
 
 // WizardModel 设置向导。
 type WizardModel struct {
-	step   int // 0 渐变色 1 特殊符号
-	width  int
-	height int
-	gradOK bool
+	step      int // 0 渐变色 1 特殊符号 2 自动重启
+	width     int
+	height    int
+	gradOK    bool
+	relaunch  bool
+	symBroken bool
 }
 
 // NewWizard 创建向导。
@@ -54,18 +56,41 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.step == 1 {
+			switch msg.String() {
+			case "y":
+				m.step = 2
+			case "n":
+				m.symBroken = true
+				m.step = 2
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "y":
-			return m, func() tea.Msg {
-				return wizardDoneMsg{settings: meta.Settings{SetupDone: true, Truecolor: m.gradOK, Symbols: true}}
-			}
+			m.relaunch = true
+			return m, m.done()
 		case "n":
-			return m, func() tea.Msg {
-				return wizardDoneMsg{settings: meta.Settings{SetupDone: true, Truecolor: m.gradOK, Symbols: false, Plain: true}}
-			}
+			m.relaunch = false
+			return m, m.done()
 		}
 	}
 	return m, nil
+}
+
+// done 收尾并落盘设置。
+func (m WizardModel) done() tea.Cmd {
+	settings := meta.Settings{
+		SetupDone:    true,
+		Truecolor:    m.gradOK,
+		Symbols:      true,
+		AutoRelaunch: &m.relaunch,
+	}
+	if m.symBroken {
+		settings.Symbols = false
+		settings.Plain = true
+	}
+	return func() tea.Msg { return wizardDoneMsg{settings: settings} }
 }
 
 func (m WizardModel) View() string {
@@ -78,20 +103,26 @@ func (m WizardModel) View() string {
 	b.WriteString(styleTitle.Render("Agent Maid |´・ω・)ノ · 首次运行设置向导"))
 	b.WriteString("\n\n")
 
-	if m.step == 0 {
-		b.WriteString(m.box(fmt.Sprintf("检测 1/2 · %s", styleOk.Render("渐变色"))))
+	switch m.step {
+	case 0:
+		b.WriteString(m.box(fmt.Sprintf("检测 1/3 · %s", styleOk.Render("渐变色"))))
 		b.WriteString("\n")
 		b.WriteString(gradientBar(w))
 		b.WriteString("\n\n")
 		b.WriteString("上方色带是否显示为平滑渐变(而不是断层、纯灰或纯黑)?\n\n")
 		b.WriteString(styleHelp.Render("y 支持    n 不支持    Esc 跳过向导"))
-	} else {
-		b.WriteString(m.box(fmt.Sprintf("检测 2/2 · %s", styleOk.Render("特殊符号"))))
+	case 1:
+		b.WriteString(m.box(fmt.Sprintf("检测 2/3 · %s", styleOk.Render("特殊符号"))))
 		b.WriteString("\n")
 		b.WriteString(stylePlainName.Render("▀▄█  ❯ ●  ⠋⠙⠹⠸  │─┌┐└┘  Agent Maid |´・ω・)ノ"))
 		b.WriteString("\n\n")
 		b.WriteString("以上字符是否全部正常显示(没有方框、问号或乱码)?\n\n")
 		b.WriteString(styleHelp.Render("y 支持    n 不支持(将启用纯文本界面)"))
+	default:
+		b.WriteString(m.box(fmt.Sprintf("设置 3/3 · %s", styleOk.Render("自动重启"))))
+		b.WriteString("\n\n")
+		b.WriteString("切换完成后,是否自动打开/重启对应软件?(Codex 为命令行工具,不受影响)\n\n")
+		b.WriteString(styleHelp.Render("y 自动重启    n 不自动重启    Esc 跳过向导"))
 	}
 	return lipgloss.Place(w, m.height, lipgloss.Center, lipgloss.Center, b.String())
 }
