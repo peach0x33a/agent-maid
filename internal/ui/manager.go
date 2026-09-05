@@ -29,7 +29,7 @@ type Manager interface {
 
 // newRegistry 注册所有支持的工具。
 func newRegistry() []Manager {
-	return []Manager{NewChatgpt(), NewZcode()}
+	return []Manager{NewChatgpt(), NewZcode(), NewAntigravity()}
 }
 
 // HasTarget 报告 key 是否为已注册工具的 CLI 预选名。

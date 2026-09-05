@@ -29,39 +29,63 @@ type targetInfo struct {
 	Path    string // 凭据落点(展示用)
 	pxLarge []string
 	pxSmall []string
-	grad    []string       // 品牌渐变(对角)
-	accent  lipgloss.Color // 选中/强调色
-	cache   *artFrames     // 动画/置灰渲染缓存(懒构建)
+	grad    []string // 品牌渐变(对角;选中态着色)
+	// colLarge/colSmall 非 nil 时选中态改用官方 logo 的真实逐像素颜色
+	// (多色 logo 用),忽略 grad 与流光相位。
+	colLarge [][]string
+	colSmall [][]string
+	accent   lipgloss.Color // 选中/强调色
+	cache    *artFrames     // 动画/置灰渲染缓存(懒构建)
 }
 
 // artFrames 预渲染的动画帧与静态置灰图,避免每帧重算。
 type artFrames struct {
 	framesLarge []string
 	framesSmall []string
+	trueLarge   string
+	trueSmall   string
 	dimLarge    string
 	dimSmall    string
 }
 
-// renderArt 渲染图标。dim=true 为静态灰阶;否则返回循环动画的第 phase 帧
-// (渐变相位沿对角线流动)。帧与置灰图首次使用时预渲染并缓存。
+// renderArt 渲染图标。dim=true 为静态灰阶;多色 logo(colXxx 非 nil)用
+// 官方真实像素色;否则返回循环动画的第 phase 帧(渐变相位沿对角线流动)。
+// 各形态首次使用时预渲染并缓存。
 func (t *targetInfo) renderArt(small bool, dim bool, phase int) string {
 	if t.cache == nil {
 		t.cache = &artFrames{}
 	}
-	px, frames, dimStr := t.pxLarge, &t.cache.framesLarge, &t.cache.dimLarge
+	c := t.cache
+	if dim {
+		px, dimStr := t.pxLarge, &c.dimLarge
+		if small {
+			px, dimStr = t.pxSmall, &c.dimSmall
+		}
+		if *dimStr == "" {
+			*dimStr = renderHalfblock(px, gradDim, 0)
+		}
+		return *dimStr
+	}
+	if !small && t.colLarge != nil {
+		if c.trueLarge == "" {
+			c.trueLarge = renderHalfblockTrue(t.colLarge)
+		}
+		return c.trueLarge
+	}
+	if small && t.colSmall != nil {
+		if c.trueSmall == "" {
+			c.trueSmall = renderHalfblockTrue(t.colSmall)
+		}
+		return c.trueSmall
+	}
+	px, frames := t.pxLarge, &c.framesLarge
 	if small {
-		px, frames, dimStr = t.pxSmall, &t.cache.framesSmall, &t.cache.dimSmall
+		px, frames = t.pxSmall, &c.framesSmall
 	}
 	if len(*frames) == 0 {
 		for i := 0; i < animFrames; i++ {
 			*frames = append(*frames, renderHalfblock(px, t.grad, float64(i)/float64(animFrames)))
 		}
-	}
-	if *dimStr == "" {
-		*dimStr = renderHalfblock(px, gradDim, 0)
-	}
-	if dim {
-		return *dimStr
 	}
 	return (*frames)[phase%len(*frames)]
 }

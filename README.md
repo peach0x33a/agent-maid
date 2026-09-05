@@ -1,9 +1,10 @@
 # agent-maid
 
-把 **ChatGPT(Codex)** 与 **ZCode** 两个账号切换工具合并成一体的 TUI 管家。运行后首屏选择目标软件(官方图标渲染的渐变方块 logo,布局随终端宽度自适应并居中),再进入对应的账号切换器:
+把 **ChatGPT(Codex)**、**ZCode**、**Google Antigravity(反重力)** 三个账号切换工具合并成一体的 TUI 管家。运行后首屏选择目标软件(官方图标渲染的渐变方块 logo,布局随终端宽度自适应并居中),再进入对应的账号管理器:
 
 - **ChatGPT**:把各种已知格式的会话凭据(WebSession / sub2api 导出)导入统一账号库,一键投影为官方 Codex 原生 `auth.json`(`~/.codex/auth.json`),实现账号切换;官方 APP 零改动。
 - **ZCode**:把当前 `~/.zcode/v2/credentials.json` 存进命名槽位,在多个账号之间一键切换(凭据密文原样搬运,自动解密出账号标签)。
+- **Antigravity**:快照/切换 `~/.gemini/oauth_creds.json` 与 `google_accounts.json`,在多个 Google 账号之间一键切换(邮箱标签自动从 id_token 解析)。
 
 Go 实现,单二进制。ChatGPT 部分完全离线(不联网刷新 token,不发送任何数据);ZCode 部分仅在内存中解密凭据用于展示标签,不落明文。
 
@@ -11,9 +12,10 @@ Go 实现,单二进制。ChatGPT 部分完全离线(不联网刷新 token,不发
 
 ```bash
 go build -o agent-maid .
-./agent-maid            # TUI:首屏选择 ChatGPT / ZCode
-./agent-maid chatgpt    # 跳过首屏,直接进入 ChatGPT 账号管理
-./agent-maid zcode      # 跳过首屏,直接进入 ZCode 账号管理
+./agent-maid              # TUI:首屏选择目标软件
+./agent-maid chatgpt      # 跳过首屏,直接进入 ChatGPT 账号管理
+./agent-maid zcode        # 跳过首屏,直接进入 ZCode 账号管理
+./agent-maid antigravity  # 跳过首屏,直接进入 Antigravity 账号管理(别名 anti/ag)
 ```
 
 顶部始终显示 `AgentMaid - <平台>账号管理`;底部是操作栏(`←/→` 选中操作、回车执行,也可直接按对应键)。首屏选中的 logo 播放流光动画(渐变沿对角线循环流动,预渲染 24 帧),等待 ZCode 退出时有 braille 进度 spinner。两个平台共用同一套交互模式:
@@ -53,7 +55,8 @@ go build -o agent-maid .
 ```
 ~/.config/agent-maid/
 ├── chatgpt/store.json    # ChatGPT 账号库
-└── zcode/slots/*.json    # ZCode 账号槽位
+├── zcode/slots/*.json    # ZCode 账号槽位
+└── antigravity/slots/*.json  # Antigravity 账号槽位
 ```
 
 首次运行会自动把前身工具的数据搬过来(不覆盖已有文件):
@@ -70,6 +73,7 @@ go build -o agent-maid .
 | `ZCODE_V2_DIR` | 覆盖 ZCode 数据目录(缺省 `~/.zcode/v2`) |
 | `ZCODE_ACC_SWITCH_DIR` | 覆盖 ZCode 槽位目录(设置后不做迁移,沿用旧目录) |
 | `ZCODE_CREDENTIAL_SECRET` | 与 ZCode 本身一致:若 ZCode 以此变量运行,本工具会自动沿用 |
+| `ANTIGRAVITY_GEMINI_DIR` | 覆盖 Antigravity 的 gemini 数据目录(缺省 `~/.gemini`) |
 
 ## 目录结构
 
@@ -85,6 +89,8 @@ internal/ui/logos.go       targetInfo 定义与半块渐变渲染(含动画帧�
 internal/ui/logos_art.go   官方图标栅格化的像素矩阵(生成文件,勿手改)
 internal/ui/tui_chatgpt.go ChatGPT 管理器(实现 Manager)
 internal/ui/tui_zcode.go   ZCode 管理器(实现 Manager)
+internal/ui/tui_antigravity.go  Antigravity 管理器(实现 Manager)
+internal/antigravity/      Antigravity 凭据读写(oauth_creds/google_accounts)、槽位存储
 internal/gptsession/       ChatGPT 凭据格式识别、JWT 解析、字段解析链、合成 id_token
 internal/gptauth/          官方 auth.json 构建/合并(保序)、原子写入、备份
 internal/gptstore/         ChatGPT 账号库(去重、激活指针、持久化 0600)
@@ -93,6 +99,11 @@ internal/zcodestore/       ZCode 槽位存储(原子写入 0600)
 internal/zcodeapp/         ZCode 业务操作(保存/切换/自动备份)
 internal/atomicio/         临时文件 + rename 的原子写入
 ```
+
+### Antigravity 账号管理
+
+- 保存/切换的是 `~/.gemini/` 下两个文件的原文快照:`oauth_creds.json`(0600)与 `google_accounts.json`;槽位标签(邮箱)自动从 `id_token` JWT 解析。
+- Antigravity 正在运行时会提示:切换后建议尽快重启 Antigravity,避免运行中的凭据回写覆盖。
 
 ## 接入新工具
 

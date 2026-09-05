@@ -65,6 +65,43 @@ func hexRGB(s string) (r, g, b float64) {
 	return float64(v >> 16 & 0xFF), float64(v >> 8 & 0xFF), float64(v & 0xFF)
 }
 
+// colorAt 取颜色矩阵中的像素色("."/越界 = 空)。
+func colorAt(colors [][]string, x, y int) string {
+	if y < 0 || y >= len(colors) || x < 0 || x >= len(colors[y]) {
+		return ""
+	}
+	c := colors[y][x]
+	if c == "." {
+		return ""
+	}
+	return c
+}
+
+// renderHalfblockTrue 用像素自带颜色渲染半块方块(官方多色 logo,
+// 如 Antigravity 的彩色 A)。
+func renderHalfblockTrue(colors [][]string) string {
+	w := len(colors[0])
+	h := len(colors)
+	var b strings.Builder
+	for row := 0; row*2 < h; row++ {
+		for x := 0; x < w; x++ {
+			up, down := colorAt(colors, x, row*2), colorAt(colors, x, row*2+1)
+			switch {
+			case up == "" && down == "":
+				b.WriteString(" ")
+			case up != "" && down != "":
+				b.WriteString(lipStyle(up, down).Render("▀"))
+			case up != "":
+				b.WriteString(lipStyle(up, "").Render("▀"))
+			default: // 仅下半实
+				b.WriteString(lipStyle(down, down).Render("▀"))
+			}
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
 // inkOf 取像素 ink 等级(0-9)归一化。
 func inkOf(px []string, x, y int) float64 {
 	if y < 0 || y >= len(px) || x < 0 || x >= len(px[y]) {

@@ -27,6 +27,8 @@ func main() {
 			pre = "chatgpt"
 		case "zcode", "z":
 			pre = "zcode"
+		case "antigravity", "anti", "ag":
+			pre = "antigravity"
 		case "version", "--version", "-v":
 			fmt.Printf("%s %s\n", meta.Name, meta.Version)
 			return

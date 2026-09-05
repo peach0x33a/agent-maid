@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -82,15 +83,17 @@ func (m SelectModel) View() string {
 		h = 24
 	}
 
-	// 尺寸自适应:能横排就横排,并尽量用大图
-	small := w < 74
-	cols := m.columns(small, m.phase)
+	// 尺寸自适应:优先大图横排,放不下换小图横排,再放不下纵向堆叠
+	cols := m.columns(false, m.phase)
+	if totalWidth(cols) > w-4 {
+		cols = m.columns(true, m.phase)
+	}
 
 	var inner string
 	switch {
 	case len(cols) == 1:
 		inner = cols[0]
-	case w >= 74:
+	case totalWidth(cols) <= w-4:
 		inner = joinHorizontal(cols, "     ")
 	default:
 		inner = joinVertical(cols, "")
@@ -100,7 +103,7 @@ func (m SelectModel) View() string {
 	contentW := lipgloss.Width(inner)
 	boxW := contentW
 	if w-4 > boxW {
-		boxW = min(w-4, 96)
+		boxW = min(w-4, 108)
 	}
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -111,10 +114,14 @@ func (m SelectModel) View() string {
 		Render(inner)
 
 	hint := "←/→ 或 Tab 选择"
-	for i := range m.infos {
-		hint += fmt.Sprintf(" · %d", i+1)
+	if n := len(m.infos); n > 1 {
+		digits := make([]string, 0, n)
+		for i := 1; i <= n; i++ {
+			digits = append(digits, fmt.Sprintf("%d", i))
+		}
+		hint += " · " + strings.Join(digits, "/") + " 直接选"
 	}
-	hint += " 直接选 · Enter 进入 · q 退出"
+	hint += " · Enter 进入 · q 退出"
 
 	block := lipgloss.JoinVertical(lipgloss.Center,
 		styleTitle.Render("Agent Maid |´・ω・)ノ"),
@@ -201,6 +208,18 @@ func joinVertical(cols []string, gap string) string {
 		args = append(args, gap, c)
 	}
 	return lipgloss.JoinVertical(lipgloss.Center, args...)
+}
+
+// totalWidth 计算横排总宽度(含栏间距 5)。
+func totalWidth(cols []string) int {
+	n := 0
+	for i, c := range cols {
+		if i > 0 {
+			n += 5
+		}
+		n += lipgloss.Width(c)
+	}
+	return n
 }
 
 func min(a, b int) int {
