@@ -616,19 +616,27 @@ func (m ChatgptModel) currentLine() string {
 
 func (m ChatgptModel) accountRow(i int) string {
 	a := m.accounts[i]
+	inUse := m.current != nil && a.AccountID != "" && a.AccountID == m.current.AccountID
+
 	cursor := "  "
-	nameStyle := lipgloss.NewStyle()
-	if i == m.cursor {
+	var nameStyle lipgloss.Style
+	switch {
+	case i == m.cursor:
 		cursor = styleSel.Render("❯ ")
 		nameStyle = styleSel
+	case inUse:
+		nameStyle = styleInUseName
+	default:
+		nameStyle = stylePlainName
 	}
+
 	name := a.Label
 	if len(name) > 30 {
 		name = name[:30]
 	}
 	mark := ""
-	if m.current != nil && a.AccountID != "" && a.AccountID == m.current.AccountID {
-		mark = styleOk.Render(" ●使用中")
+	if inUse {
+		mark = " " + badgeInUse()
 	}
 	warn := ""
 	if !a.Refreshable {

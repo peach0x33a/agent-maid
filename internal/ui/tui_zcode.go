@@ -524,25 +524,33 @@ func (m ZcodeModel) currentLine() string {
 
 func (m ZcodeModel) slotRow(i int) string {
 	slot := m.slots[i]
+	inUse := m.current.Exists && zcode.EqualCredentials(m.current.Creds, slot.Credentials)
+
 	cursor := "  "
-	nameStyle := lipgloss.NewStyle()
-	if i == m.cursor {
+	var nameStyle lipgloss.Style
+	switch {
+	case i == m.cursor:
 		cursor = styleSel.Render("❯ ")
 		nameStyle = styleSel
+	case inUse:
+		nameStyle = styleInUseName
+	default:
+		nameStyle = stylePlainName
+	}
+
+	name := slot.Name
+	if len(name) > 24 {
+		name = name[:24]
 	}
 	mark := ""
-	if m.current.Exists && zcode.EqualCredentials(m.current.Creds, slot.Credentials) {
-		mark = styleOk.Render(" ●使用中")
+	if inUse {
+		mark = " " + badgeInUse()
 	}
 	warn := ""
 	if slot.KeyFingerprint != zcode.KeyFingerprint(zcode.DeriveKey(zcode.CredentialSecret())) {
 		warn = styleWarn.Render(" ⚠跨机/跨密钥")
 	}
 	meta := zcodeAccountLabel(slot.Meta)
-	name := slot.Name
-	if len(name) > 24 {
-		name = name[:24]
-	}
 	return fmt.Sprintf("%s%s %s%s%s", cursor, nameStyle.Render(fmt.Sprintf("%-26s", name)), styleDim.Render(meta), mark, warn)
 }
 
