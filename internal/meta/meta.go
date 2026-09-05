@@ -38,6 +38,11 @@ func GPTStorePath() string { return filepath.Join(Dir(), "chatgpt", "store.json"
 // in slots/ (zcodestore appends that itself).
 func ZcodeBaseDir() string { return filepath.Join(Dir(), "zcode") }
 
+// migrateMarker 迁移完成标记文件(位于统一配置目录根)。
+// 迁移只做一次:否则每次启动都会把旧目录里存在、新目录里缺失的槽位补回来,
+// 用户在新位置删除的账号会被"复活"。
+const migrateMarker = ".migrated"
+
 // MigrateLegacy copies data from the two predecessor tools on first run, so
 // existing account libraries and slots carry over untouched. Best effort:
 // any failure is silently ignored and the new layout starts empty.
@@ -45,23 +50,49 @@ func ZcodeBaseDir() string { return filepath.Join(Dir(), "zcode") }
 //	~/.config/gptswitch/store.json            → chatgpt/store.json
 //	~/.config/chatgpt-app-account-switch/...  → (same, second candidate)
 //	~/.config/zcode-acc-switch/slots/*.json   → zcode/slots/*.json
+//
+// 只跑一次:写过标记、或新目录已经在用(说明用户开始管理数据了)之后,
+// 不再从旧目录补文件——旧目录只是历史快照,以新位置为准。
 func MigrateLegacy() {
-	if d := os.Getenv("ZCODE_ACC_SWITCH_DIR"); d != "" {
-		// 用户显式指定了槽位目录:完全沿用,不做迁移
-	} else {
-		migrateDir(
-			legacyConfigDir("zcode-acc-switch"),
-			filepath.Join(ZcodeBaseDir(), "slots"),
-		)
+	marker := filepath.Join(Dir(), migrateMarker)
+	if _, err := os.Stat(marker); err == nil {
+		return // 已经迁移过
+	}
+
+	// 新目录已存在 = 用户已在 agent-maid 里保存/管理过数据。
+	// 兼容在修复前用过本程序的用户:不补迁移,直接视为完成。
+	slotsDst := filepath.Join(ZcodeBaseDir(), "slots")
+	gptDst := GPTStorePath()
+	if dirExists(slotsDst) || dirExists(filepath.Dir(gptDst)) {
+		writeMarker(marker)
+		return
+	}
+
+	if os.Getenv("ZCODE_ACC_SWITCH_DIR") == "" {
+		// 用户显式指定了槽位目录时完全沿用,不做迁移
+		migrateDir(legacyConfigDir("zcode-acc-switch"), slotsDst)
 	}
 	for _, old := range []string{
 		filepath.Join(legacyConfigDir("gptswitch"), "store.json"),
 		filepath.Join(legacyConfigDir("chatgpt-app-account-switch"), "store.json"),
 	} {
-		if migrateFile(old, GPTStorePath()) {
+		if migrateFile(old, gptDst) {
 			break
 		}
 	}
+	writeMarker(marker)
+}
+
+func dirExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
+}
+
+func writeMarker(marker string) {
+	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
+		return
+	}
+	_ = os.WriteFile(marker, []byte("1\n"), 0o600)
 }
 
 // legacyConfigDir mirrors the old tools' ~/.config/<name> resolution
