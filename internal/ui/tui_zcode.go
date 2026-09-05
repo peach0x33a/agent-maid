@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"agent-maid/internal/background"
 	"agent-maid/internal/zcode"
 	"agent-maid/internal/zcodeapp"
 	"agent-maid/internal/zcodestore"
@@ -52,7 +53,6 @@ type ZcodeModel struct {
 	baseModel
 
 	svc      *zcodeapp.Service
-	quit     bool
 	slots    []zcodestore.Slot
 	cursor   int
 	current  zcodeapp.CurrentInfo
@@ -117,8 +117,16 @@ type zLoadedMsg struct {
 // waitTickMsg 等待 ZCode 退出的轮询节拍(兼作 spinner 动画帧)。
 type waitTickMsg struct{}
 
-// spinFrames 等待界面的 braille 菊花动画帧。
-var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+// spinFramesBraille 等待界面的 braille 菊花动画帧。
+var spinFramesBraille = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// spinFrames 依据向导结果选择动画帧(纯文本模式用 ASCII)。
+func spinFrames() []string {
+	if plainMode {
+		return []string{"|", "/", "-", "\\"}
+	}
+	return spinFramesBraille
+}
 
 // zApplyResultMsg 异步执行切换的结果。
 type zApplyResultMsg struct {
@@ -259,9 +267,11 @@ func (m ZcodeModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
 		return m, nil
 	}
 	switch key.String() {
-	case "q", "Q", "ctrl+c":
+	case "ctrl+c":
 		m.quit = true
 		return m, tea.Quit
+	case "q", "Q":
+		return m, m.handleQuitKey()
 	case "esc":
 		return m, backCmd
 	case "left":
@@ -473,9 +483,19 @@ func (m ZcodeModel) updateWaiting(msg tea.Msg) (Manager, tea.Cmd) {
 		m.mode = modeNormal
 		m.status = status{0, "已取消等待,凭据未做任何更改"}
 		return m, nil
-	case "q", "Q", "ctrl+c":
+	case "c":
+		// 关闭本工具,派生后台进程继续等待 ZCode 退出并完成切换
+		if err := background.SpawnWaitZcode(m.waitingFor); err != nil {
+			m.status = status{2, "后台任务启动失败: " + err.Error()}
+			return m, nil
+		}
 		m.quit = true
 		return m, tea.Quit
+	case "ctrl+c":
+		m.quit = true
+		return m, tea.Quit
+	case "q", "Q":
+		return m, m.handleQuitKey()
 	}
 	return m, nil
 }
@@ -530,7 +550,7 @@ func (m ZcodeModel) slotRow(i int) string {
 	var nameStyle lipgloss.Style
 	switch {
 	case i == m.cursor:
-		cursor = styleSel.Render("❯ ")
+		cursor = styleSel.Render(cursorGlyph())
 		nameStyle = styleSel
 	case inUse:
 		nameStyle = styleInUseName
@@ -609,7 +629,7 @@ func (m ZcodeModel) View() string {
 		b.WriteString(m.confirmBox(text, keys))
 	case modeWaiting:
 		elapsed := time.Since(m.waitStart).Truncate(time.Second)
-		spin := styleSel.Render(spinFrames[m.spin%len(spinFrames)])
+		spin := styleSel.Render(spinFrames()[m.spin%len(spinFrames())])
 		lines := []string{
 			styleTitle.Render(fmt.Sprintf("%s 等待 ZCode 完全退出…(已等待 %v)", spin, elapsed)),
 			fmt.Sprintf("ZCode 退出后将自动切换到槽位 %q 并写入 credentials.json。", m.waitingFor),
@@ -626,7 +646,7 @@ func (m ZcodeModel) View() string {
 		if len(m.waitProcs) == 0 {
 			lines = append(lines, styleDim.Render("  (检测中…)"))
 		}
-		lines = append(lines, "", styleWarn.Render("[f] 立即替换(无视风险)")+"  [n] 取消等待  [q] 退出")
+		lines = append(lines, "", styleWarn.Render("[f] 立即替换(无视风险)")+"  [c] 关闭工具,后台继续等待并切换  [n] 取消等待  [q] 退出")
 		b.WriteString("\n" + styleBox.Render(strings.Join(lines, "\n")) + "\n")
 	case modeHelp:
 		b.WriteString("\n" + styleBox.Render(zHelpView()) + "\n")

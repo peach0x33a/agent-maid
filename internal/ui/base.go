@@ -9,6 +9,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"agent-maid/internal/meta"
 )
 
 // ───────────────────────── 模式/输入用途 ─────────────────────────
@@ -55,6 +57,8 @@ func (s status) render() string {
 		return styleWarn.Render("⚠ " + s.text)
 	case 4:
 		return styleErr.Render(s.text)
+	case 5:
+		return lipgloss.NewStyle().Reverse(true).Render(s.text)
 	default:
 		return styleDim.Render(s.text)
 	}
@@ -106,18 +110,64 @@ func banner(info *targetInfo) string {
 		Render("AgentMaid - " + info.Name + "账号管理")
 }
 
+// ───────────────────────── 纯文本降级(向导判定符号不支持时) ─────────────────────────
+
+// plainMode 由设置向导写入:终端无法显示特殊符号时,图标/光标/徽章退化为纯文本。
+var plainMode bool
+
+// cursorGlyph 列表光标符号。
+func cursorGlyph() string {
+	if plainMode {
+		return "> "
+	}
+	return "❯ "
+}
+
+// badgeInUse "使用中"徽章:常规为绿底深字;纯文本降级为绿色方括号文本。
+func badgeInUse() string {
+	if plainMode {
+		return styleOk.Render(" [使用中] ")
+	}
+	return lipgloss.NewStyle().Bold(true).
+		Foreground(lipgloss.Color("#15151E")).Background(lipgloss.Color("42")).
+		Render(" 使用中 ")
+}
+
 // ───────────────────────── 共享模型状态 ─────────────────────────
 
 // baseModel 各工具界面共享的交互状态与提示生命周期。
 type baseModel struct {
 	width      int // 终端宽度(WindowSizeMsg 时写入,用于全宽分隔线)
 	mode       mode
+	quit       bool // 已请求退出
 	status     status
 	chipIdx    int       // 操作栏选中项
 	shakeFrame int       // 摇晃动画帧序号
 	deleteArm  bool      // 已按过一次 d,等待再次确认
 	deleteName string    // 待删除项的标识(槽位名/账号 ID)
 	deleteAt   time.Time // 进入待确认的时刻(超时自动撤下)
+	quitArm    bool      // 已按过一次 q,等待再次确认退出
+	quitAt     time.Time // 首次按下 q 的时刻(0.5s 内的第二次按下无效)
+}
+
+// quitArmDelay 第二次 Q 需距首次至少 0.5s 才生效(防误触连按)。
+const quitArmDelay = 500 * time.Millisecond
+
+// handleQuitKey 处理 q/Q:首次按下给出反选高亮提示;第二次按下须间隔
+// 0.5s 以上才真正退出;期间按其他键自动取消。
+func (b *baseModel) handleQuitKey() tea.Cmd {
+	if b.quitArm {
+		if time.Since(b.quitAt) >= quitArmDelay {
+			b.quit = true
+			return tea.Quit
+		}
+		return nil // 间隔不足,忽略本次按下
+	}
+	b.deleteArm = false
+	b.quitArm = true
+	b.quitAt = time.Now()
+	b.status = status{5, " 再按一次 Q 退出 "}
+	return nil
 }
 
 // header 顶部横幅 + 全宽分隔线(横幅的线稍亮)。
@@ -148,10 +198,11 @@ func (b *baseModel) setStatus(err error, okText, errPrefix string) {
 	}
 }
 
-// clearPrompt 撤下红色删除提示(切换模式/移动光标/超时/返回首屏时调用)。
+// clearPrompt 撤下红色删除提示与退出提示(切换模式/移动光标/超时/返回首屏时调用)。
 func (b *baseModel) clearPrompt() {
 	b.deleteArm = false
-	if b.status.kind == 4 {
+	b.quitArm = false
+	if b.status.kind == 4 || b.status.kind == 5 {
 		b.status = status{}
 	}
 }
@@ -163,6 +214,7 @@ func (b *baseModel) armPrompt(name, text string) tea.Cmd {
 	b.deleteArm = true
 	b.deleteName = name
 	b.deleteAt = time.Now()
+	b.quitArm = false
 	b.status = status{4, text}
 	if !wasArmed {
 		return statusTick()
@@ -200,10 +252,10 @@ func (b baseModel) renderStatus() string {
 	return b.status.render()
 }
 
-// bottomBar 底部操作栏与提示行。
+// bottomBar 底部操作栏与提示行(附仓库地址)。
 func (b baseModel) bottomBar(info *targetInfo, chips []chip) string {
 	bar := chipBar(chips, b.chipIdx, info.accent)
-	hint := styleDim.Render("↑/↓ 选条目 · ←/→ 选操作 · 回车执行选中操作 · Esc 返回选择 · q/Q 退出")
+	hint := styleDim.Render("↑/↓ 选条目 · ←/→ 选操作 · 回车执行选中操作 · Esc 返回选择 · q/Q 退出 · " + meta.Repo)
 	return bar + "\n" + hint
 }
 

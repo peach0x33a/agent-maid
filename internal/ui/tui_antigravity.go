@@ -51,7 +51,6 @@ type AntigravityModel struct {
 	baseModel
 
 	svc     *antigravity.Service
-	quit    bool
 	slots   []antigravity.Slot
 	cursor  int
 	current antigravity.CurrentInfo
@@ -191,9 +190,11 @@ func (m AntigravityModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
 		return m, nil
 	}
 	switch key.String() {
-	case "q", "Q", "ctrl+c":
+	case "ctrl+c":
 		m.quit = true
 		return m, tea.Quit
+	case "q", "Q":
+		return m, m.handleQuitKey()
 	case "esc":
 		return m, backCmd
 	case "left":
@@ -407,7 +408,7 @@ func (m AntigravityModel) slotRow(i int) string {
 	var nameStyle lipgloss.Style
 	switch {
 	case i == m.cursor:
-		cursor = styleSel.Render("❯ ")
+		cursor = styleSel.Render(cursorGlyph())
 		nameStyle = styleSel
 	case inUse:
 		nameStyle = styleInUseName

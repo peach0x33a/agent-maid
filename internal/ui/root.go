@@ -2,32 +2,46 @@ package ui
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
+
+	"agent-maid/internal/meta"
 )
 
 type screen int
 
 const (
-	screenSelect screen = iota
-	screenTarget
+	screenWizard screen = iota // 首次运行设置向导
+	screenSelect               // 目标软件选择
+	screenTarget               // 目标管理器
 )
 
-// RootModel 顶层模型:首屏选择目标软件,再进入对应管理器。
+// plainMode 声明在 base.go;向导结果在这里落盘并生效。
+
+// RootModel 顶层模型:设置向导(仅首次)→ 首屏选择目标软件 → 对应管理器。
 // 只面向 Manager 接口路由,不感知任何具体工具。
 type RootModel struct {
 	screen   screen
 	registry []Manager // 全部已注册工具
 	cur      Manager   // 当前进入的管理器(nil = 首屏)
-
-	sel SelectModel
+	pre      string    // CLI 预选的工具 Key(向导完成后直接进入)
+	sel      SelectModel
+	wiz      WizardModel
 }
 
 // NewRoot 创建根模型。pre 为 CLI 预选的工具 Key(空串则停在首屏)。
 func NewRoot(pre string) RootModel {
 	registry := newRegistry()
+	settings := meta.LoadSettings()
+	plainMode = settings.Plain
 	m := RootModel{
 		screen:   screenSelect,
 		registry: registry,
+		pre:      pre,
 		sel:      NewSelect(registry),
+		wiz:      NewWizard(),
+	}
+	if !settings.SetupDone {
+		m.screen = screenWizard
+		return m
 	}
 	for _, mgr := range registry {
 		if mgr.Info().Key == pre {
@@ -39,15 +53,34 @@ func NewRoot(pre string) RootModel {
 }
 
 func (m RootModel) Init() tea.Cmd {
-	if m.cur != nil {
-		return m.cur.Init()
+	switch m.screen {
+	case screenWizard:
+		return m.wiz.Init()
+	case screenTarget:
+		if m.cur != nil {
+			return m.cur.Init()
+		}
 	}
 	return m.sel.Init()
 }
 
 func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// 全局消息:选择完成 / 返回首屏
+	// 全局消息:向导完成 / 选择完成 / 返回首屏
 	switch msg := msg.(type) {
+	case wizardDoneMsg:
+		_ = meta.SaveSettings(msg.settings)
+		plainMode = msg.settings.Plain
+		if m.pre != "" {
+			for _, mgr := range m.registry {
+				if mgr.Info().Key == m.pre {
+					m.cur = mgr
+					m.screen = screenTarget
+					return m, m.cur.Init()
+				}
+			}
+		}
+		m.screen = screenSelect
+		return m, m.sel.Init()
 	case targetSelectedMsg:
 		if msg.Index >= 0 && msg.Index < len(m.registry) {
 			m.cur = m.registry[msg.Index]
@@ -65,29 +98,40 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.registry[i], _ = mgr.Update(msg)
 		}
 		if m.cur != nil {
-			m.cur, _ = m.cur.Update(msg) // cur 可能是注册表之外的旧副本
+			m.cur, _ = m.cur.Update(msg) // 必须接回副本,否则宽度等状态丢失
 		}
 		var cmd tea.Cmd
 		m.sel, cmd = m.sel.Update(msg)
 		return m, cmd
 	}
 
-	if m.screen == screenSelect {
+	switch m.screen {
+	case screenWizard:
+		var cmd tea.Cmd
+		m.wiz, cmd = m.wiz.Update(msg)
+		return m, cmd
+	case screenSelect:
 		var cmd tea.Cmd
 		m.sel, cmd = m.sel.Update(msg)
 		return m, cmd
-	}
-	if m.cur != nil {
-		var cmd tea.Cmd
-		m.cur, cmd = m.cur.Update(msg)
-		return m, cmd
+	case screenTarget:
+		if m.cur != nil {
+			var cmd tea.Cmd
+			m.cur, cmd = m.cur.Update(msg)
+			return m, cmd
+		}
 	}
 	return m, nil
 }
 
 func (m RootModel) View() string {
-	if m.screen == screenTarget && m.cur != nil {
-		return m.cur.View()
+	switch m.screen {
+	case screenWizard:
+		return m.wiz.View()
+	case screenTarget:
+		if m.cur != nil {
+			return m.cur.View()
+		}
 	}
 	return m.sel.View()
 }

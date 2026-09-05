@@ -105,6 +105,13 @@ internal/atomicio/         临时文件 + rename 的原子写入
 - 保存/切换的是 `~/.gemini/` 下两个文件的原文快照:`oauth_creds.json`(0600)与 `google_accounts.json`;槽位标签(邮箱)自动从 `id_token` JWT 解析。
 - Antigravity 正在运行时会提示:切换后建议尽快重启 Antigravity,避免运行中的凭据回写覆盖。
 
+## 其他特性
+
+- **首次运行设置向导**：自检终端的渐变色与特殊符号支持，符号不受支持时自动启用纯文本降级模式（结果存于 `settings.json`，删除后可重新触发向导）
+- **关闭后后台切换**：ZCode 等待界面按 `c` 可关闭本工具，由脱离终端的后台进程继续等待 ZCode 退出并完成替换（`--wait-apply` 隐藏子命令）
+- **系统级通知**：后台替换完成后弹系统提示——Linux 用 `notify-send`、macOS 用 `osascript`、Windows 用 `user32.MessageBoxW`
+- **退出防误触**：按 `q`/`Q` 需二次确认（反选高亮提示），两次按键间隔须 ≥0.5s，按其他键自动取消
+
 ## 平台支持
 
 | | Linux | macOS | Windows |

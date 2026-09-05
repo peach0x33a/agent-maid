@@ -52,6 +52,9 @@ type artFrames struct {
 // 官方真实像素色;否则返回循环动画的第 phase 帧(渐变相位沿对角线流动)。
 // 各形态首次使用时预渲染并缓存。
 func (t *targetInfo) renderArt(small bool, dim bool, phase int) string {
+	if plainMode {
+		return "" // 符号不受支持:不渲染块状图标,由界面回退为纯文本
+	}
 	if t.cache == nil {
 		t.cache = &artFrames{}
 	}

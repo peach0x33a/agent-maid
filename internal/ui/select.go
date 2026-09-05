@@ -128,14 +128,18 @@ func (m SelectModel) View() string {
 	}
 	hint += " · Enter 进入 · q 退出"
 
+	title := "Agent Maid |´・ω・)ノ"
+	if plainMode {
+		title = "Agent Maid"
+	}
 	block := lipgloss.JoinVertical(lipgloss.Center,
-		styleTitle.Render("Agent Maid |´・ω・)ノ"),
+		styleTitle.Render(title),
 		styleDim.Render("选择要管理的目标软件"),
 		"",
 		box,
 		"",
 		styleHelp.Render(hint),
-		styleDim.Render(meta.Name+" v"+meta.Version),
+		styleDim.Render(meta.Name+" v"+meta.Version+" · "+meta.Repo),
 	)
 	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, block)
 }

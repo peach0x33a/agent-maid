@@ -57,7 +57,6 @@ const (
 type ChatgptModel struct {
 	baseModel
 
-	quit    bool
 	loadErr error
 
 	accounts []*gptstore.Account
@@ -181,9 +180,11 @@ func (m ChatgptModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
 		return m, nil
 	}
 	switch key.String() {
-	case "q", "Q", "ctrl+c":
+	case "ctrl+c":
 		m.quit = true
 		return m, tea.Quit
+	case "q", "Q":
+		return m, m.handleQuitKey()
 	case "esc":
 		return m, backCmd
 	case "left":
@@ -625,7 +626,7 @@ func (m ChatgptModel) accountRow(i int) string {
 	var nameStyle lipgloss.Style
 	switch {
 	case i == m.cursor:
-		cursor = styleSel.Render("❯ ")
+		cursor = styleSel.Render(cursorGlyph())
 		nameStyle = styleSel
 	case inUse:
 		nameStyle = styleInUseName
