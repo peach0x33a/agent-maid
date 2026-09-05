@@ -16,7 +16,7 @@ go build -o agent-maid .
 ./agent-maid zcode      # 跳过首屏,直接进入 ZCode 账号管理
 ```
 
-顶部始终显示 `AgentMaid - <平台>账号管理`;底部是操作栏(`←/→` 选中操作、回车执行,也可直接按对应键)。两个平台共用同一套交互模式:
+顶部始终显示 `AgentMaid - <平台>账号管理`;底部是操作栏(`←/→` 选中操作、回车执行,也可直接按对应键)。首屏选中的 logo 播放流光动画(渐变沿对角线循环流动,预渲染 24 帧),等待 ZCode 退出时有 braille 进度 spinner。两个平台共用同一套交互模式:
 
 | 按键 | 作用 | ChatGPT | ZCode |
 |---|---|---|---|
@@ -76,8 +76,15 @@ go build -o agent-maid .
 ```
 main.go                    入口(可选参数 chatgpt / zcode 直接进入对应界面)
 internal/meta/             程序名/版本/统一配置目录/旧数据迁移
-internal/ui/               TUI:首屏选择 + 两个目标管理器
+internal/ui/               TUI 框架与各工具界面(见下)
+internal/ui/manager.go     Manager 接口 + 工具注册表(接入点)
+internal/ui/base.go        各工具共享的交互脚手架(模式/状态行/操作栏/删除待确认/摇晃)
+internal/ui/root.go        根路由:首屏 ↔ 当前管理器(只面向接口)
+internal/ui/select.go      首屏选择(单框自适应布局 + 流光渐变 logo)
+internal/ui/logos.go       targetInfo 定义与半块渐变渲染(含动画帧缓存)
 internal/ui/logos_art.go   官方图标栅格化的像素矩阵(生成文件,勿手改)
+internal/ui/tui_chatgpt.go ChatGPT 管理器(实现 Manager)
+internal/ui/tui_zcode.go   ZCode 管理器(实现 Manager)
 internal/gptsession/       ChatGPT 凭据格式识别、JWT 解析、字段解析链、合成 id_token
 internal/gptauth/          官方 auth.json 构建/合并(保序)、原子写入、备份
 internal/gptstore/         ChatGPT 账号库(去重、激活指针、持久化 0600)
@@ -86,6 +93,13 @@ internal/zcodestore/       ZCode 槽位存储(原子写入 0600)
 internal/zcodeapp/         ZCode 业务操作(保存/切换/自动备份)
 internal/atomicio/         临时文件 + rename 的原子写入
 ```
+
+## 接入新工具
+
+工具的凭据管理逻辑放独立的 internal 包(如 `gptauth`/`zcodeapp`),TUI 层实现
+`ui.Manager` 接口(`Info/Chips/Init/Update/View`),然后在 `internal/ui/manager.go`
+的 `newRegistry()` 里追加一行即可:首屏卡片、横幅、底部操作栏、删除待确认、
+摇晃动画等全部自动复用,已有工具零改动。
 
 ## 安全说明
 

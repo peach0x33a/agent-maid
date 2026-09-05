@@ -11,104 +11,79 @@ const (
 	screenTarget
 )
 
-// RootModel 顶层模型:首屏选择目标软件,再进入对应切换器。
+// RootModel 顶层模型:首屏选择目标软件,再进入对应管理器。
+// 只面向 Manager 接口路由,不感知任何具体工具。
 type RootModel struct {
-	screen screen
-	target Target
+	screen   screen
+	registry []Manager // 全部已注册工具
+	cur      Manager   // 当前进入的管理器(nil = 首屏)
 
-	sel   SelectModel
-	zcode ZcodeModel
-	gpt   ChatgptModel
+	sel SelectModel
 }
 
-// NewRoot 创建根模型。pre 非 TargetNone 时跳过首屏直接进入目标。
-func NewRoot(pre Target) RootModel {
-	m := RootModel{screen: screenSelect, sel: NewSelect(), zcode: NewZcode(), gpt: NewChatgpt()}
-	if pre != TargetNone {
-		m.screen = screenTarget
-		m.target = pre
+// NewRoot 创建根模型。pre 为 CLI 预选的工具 Key(空串则停在首屏)。
+func NewRoot(pre string) RootModel {
+	registry := newRegistry()
+	m := RootModel{
+		screen:   screenSelect,
+		registry: registry,
+		sel:      NewSelect(registry),
+	}
+	for _, mgr := range registry {
+		if mgr.Info().Key == pre {
+			m.cur = mgr
+			m.screen = screenTarget
+		}
 	}
 	return m
 }
 
 func (m RootModel) Init() tea.Cmd {
-	if m.screen == screenTarget {
-		return m.activeInit()
+	if m.cur != nil {
+		return m.cur.Init()
 	}
 	return m.sel.Init()
-}
-
-func (m RootModel) activeInit() tea.Cmd {
-	switch m.target {
-	case TargetZCode:
-		return m.zcode.Init()
-	case TargetChatGPT:
-		return m.gpt.Init()
-	}
-	return nil
 }
 
 func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// 全局消息:选择完成 / 返回首屏
 	switch msg := msg.(type) {
 	case targetSelectedMsg:
-		m.screen = screenTarget
-		m.target = msg.target
-		return m, m.activeInit()
+		if msg.Index >= 0 && msg.Index < len(m.registry) {
+			m.cur = m.registry[msg.Index]
+			m.screen = screenTarget
+			return m, m.cur.Init()
+		}
+		return m, nil
 	case backMsg:
+		m.cur = nil
 		m.screen = screenSelect
 		return m, m.sel.Init()
 	case tea.WindowSizeMsg:
 		var cmd tea.Cmd
-		m.sel, cmd = forwardSelect(m.sel, msg)
-		m.zcode, _ = forwardZcode(m.zcode, msg)
-		m.gpt, _ = forwardGpt(m.gpt, msg)
+		m.sel, cmd = m.sel.Update(msg)
+		if m.cur != nil {
+			_, _ = m.cur.Update(msg)
+		}
 		return m, cmd
 	}
 
-	switch m.screen {
-	case screenSelect:
+	if m.screen == screenSelect {
 		var cmd tea.Cmd
-		m.sel, cmd = forwardSelect(m.sel, msg)
+		m.sel, cmd = m.sel.Update(msg)
 		return m, cmd
-	case screenTarget:
-		switch m.target {
-		case TargetZCode:
-			var cmd tea.Cmd
-			m.zcode, cmd = forwardZcode(m.zcode, msg)
-			return m, cmd
-		case TargetChatGPT:
-			var cmd tea.Cmd
-			m.gpt, cmd = forwardGpt(m.gpt, msg)
-			return m, cmd
-		}
+	}
+	if m.cur != nil {
+		var cmd tea.Cmd
+		m.cur, cmd = m.cur.Update(msg)
+		return m, cmd
 	}
 	return m, nil
 }
 
-func forwardSelect(m SelectModel, msg tea.Msg) (SelectModel, tea.Cmd) {
-	return m.Update(msg)
-}
-
-func forwardZcode(m ZcodeModel, msg tea.Msg) (ZcodeModel, tea.Cmd) {
-	nm, cmd := m.Update(msg)
-	return nm.(ZcodeModel), cmd
-}
-
-func forwardGpt(m ChatgptModel, msg tea.Msg) (ChatgptModel, tea.Cmd) {
-	nm, cmd := m.Update(msg)
-	return nm.(ChatgptModel), cmd
-}
-
 func (m RootModel) View() string {
-	switch m.screen {
-	case screenTarget:
-		switch m.target {
-		case TargetZCode:
-			return m.zcode.View()
-		case TargetChatGPT:
-			return m.gpt.View()
-		}
+	if m.screen == screenTarget && m.cur != nil {
+		return m.cur.View()
 	}
 	return m.sel.View()
 }

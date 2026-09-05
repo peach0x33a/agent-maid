@@ -1,4 +1,6 @@
-// ChatGPT(Codex)账号库切换器 TUI,与 ZCode 切换器共用同一套交互模式。
+// ChatGPT(Codex)账号库切换器。
+// 实现 Manager 接口接入 agent-maid;共享交互(操作栏/删除待确认/摇晃动画)
+// 由 baseModel 提供,本文件只包含 ChatGPT 自身的数据与动作。
 package ui
 
 import (
@@ -22,6 +24,18 @@ import (
 
 // ───────────────────────── 模型 ─────────────────────────
 
+// cinfo ChatGPT 的展示信息。
+var cinfo = targetInfo{
+	Key:     "chatgpt",
+	Name:    "ChatGPT",
+	Desc:    "Codex 登录账号切换",
+	Path:    "~/.codex/auth.json",
+	pxLarge: chatgptPxLarge,
+	pxSmall: chatgptPxSmall,
+	grad:    []string{"#5EEAD4", "#10A37F", "#0EA5E9"},
+	accent:  lipgloss.Color("#10A37F"),
+}
+
 // cChips ChatGPT 界面底部操作栏(与 ZCode 界面同一套交互模式)。
 var cChips = []chip{
 	{"enter", "切换"},
@@ -41,9 +55,9 @@ const (
 )
 
 type ChatgptModel struct {
-	mode    mode
+	baseModel
+
 	quit    bool
-	status  status
 	loadErr error
 
 	accounts []*gptstore.Account
@@ -58,18 +72,21 @@ type ChatgptModel struct {
 
 	confirm   cconfirm
 	confirmID string
-
-	chipIdx    int    // 操作栏选中项
-	deleteArm  bool   // 已按过一次 d,等待再次确认
-	deleteName string // 待删除的账号 ID
 }
 
+// NewChatgpt 创建 ChatGPT 管理器。
 func NewChatgpt() ChatgptModel {
 	ti := textinput.New()
 	ti.Placeholder = "JSON 文件路径,或直接粘贴 JSON"
 	ti.CharLimit = 0
 	return ChatgptModel{input: ti}
 }
+
+// Info 实现 Manager。
+func (m ChatgptModel) Info() *targetInfo { return &cinfo }
+
+// Chips 实现 Manager。
+func (m ChatgptModel) Chips() []chip { return cChips }
 
 func (m ChatgptModel) Init() tea.Cmd { return m.refresh }
 
@@ -126,7 +143,7 @@ func (m ChatgptModel) selected() *gptstore.Account {
 
 type cRefreshMsg struct{}
 
-func (m ChatgptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m ChatgptModel) Update(msg tea.Msg) (Manager, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		return m, nil
@@ -135,6 +152,9 @@ func (m ChatgptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cLoadedMsg:
 		m.applyLoaded(msg)
 		return m, nil
+	case statusTickMsg:
+		cmd := m.handleStatusTick()
+		return m, cmd
 	}
 
 	switch m.mode {
@@ -151,7 +171,7 @@ func (m ChatgptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m.updateNormal(msg)
 }
 
-func (m ChatgptModel) updateNormal(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m ChatgptModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -162,26 +182,27 @@ func (m ChatgptModel) updateNormal(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "esc":
 		return m, backCmd
-	case "left", "right":
-		if key.String() == "left" {
-			m.chipIdx = (m.chipIdx + len(cChips) - 1) % len(cChips)
-		} else {
-			m.chipIdx = (m.chipIdx + 1) % len(cChips)
-		}
+	case "left":
+		m.chipNav(-1, len(cChips))
+		return m, nil
+	case "right":
+		m.chipNav(1, len(cChips))
 		return m, nil
 	case "up", "k":
-		m.deleteArm = false
+		m.clearPrompt()
 		if m.cursor > 0 {
 			m.cursor--
 		}
 	case "down", "j":
-		m.deleteArm = false
+		m.clearPrompt()
 		if m.cursor < len(m.accounts)-1 {
 			m.cursor++
 		}
 	case "g", "home":
+		m.clearPrompt()
 		m.cursor = 0
 	case "G", "end":
+		m.clearPrompt()
 		m.cursor = len(m.accounts) - 1
 	case "enter":
 		// 回车执行操作栏当前选中项;默认第 0 项即"切换"
@@ -193,15 +214,17 @@ func (m ChatgptModel) updateNormal(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // dispatch 统一的动作分发:字母键与操作栏回车共用。
-func (m ChatgptModel) dispatch(key string) (tea.Model, tea.Cmd) {
+func (m ChatgptModel) dispatch(key string) (Manager, tea.Cmd) {
 	switch key {
 	case "i": // 导入 JSON
+		m.clearPrompt()
 		m.mode = modeInput
 		m.inputFor = inputImport
 		m.input.SetValue("")
 		m.input.Focus()
 		return m, textinput.Blink
 	case "s": // 保存当前凭据到账号库(输入显示名)
+		m.clearPrompt()
 		m.mode = modeInput
 		m.inputFor = inputGSave
 		m.input.SetValue("")
@@ -209,6 +232,7 @@ func (m ChatgptModel) dispatch(key string) (tea.Model, tea.Cmd) {
 		m.input.Focus()
 		return m, textinput.Blink
 	case "S": // 快存当前凭据(自动命名)
+		m.clearPrompt()
 		text, err := m.saveCurrent("")
 		m.setStatus(err, text, "保存失败")
 		return m, func() tea.Msg { return cRefreshMsg{} }
@@ -217,41 +241,44 @@ func (m ChatgptModel) dispatch(key string) (tea.Model, tea.Cmd) {
 		if sel == nil {
 			return m, nil
 		}
+		m.clearPrompt()
 		m.mode = modeInput
 		m.inputFor = inputGRename
 		m.input.SetValue(sel.Label)
 		m.input.Placeholder = "账号显示名"
 		m.input.Focus()
 		return m, textinput.Blink
-	case "d": // 删除:再按一次 d 确认
+	case "d": // 删除:再按一次 d 确认,5s 不动自动撤下
 		sel := m.selected()
 		if sel == nil {
 			return m, nil
 		}
 		if m.deleteArm && m.deleteName == sel.ID {
-			m.deleteArm = false
+			m.clearPrompt()
 			err := m.doRemove(sel.ID)
 			m.setStatus(err, "已从账号库移除 "+sel.Label+"(官方 auth.json 未改动)", "移除失败")
 			return m, func() tea.Msg { return cRefreshMsg{} }
 		}
-		m.deleteArm = true
-		m.deleteName = sel.ID
-		m.status = status{4, fmt.Sprintf("再按一次 d 删除账号 %q", sel.Label)}
-		return m, nil
+		cmd := m.armPrompt(sel.ID, fmt.Sprintf("再按一次 d 删除账号 %q", sel.Label))
+		return m, cmd
 	case "m":
+		m.clearPrompt()
 		m.mode = modeMachine
 	case "?", "h":
+		m.clearPrompt()
 		m.mode = modeHelp
 	case "enter": // 激活选中账号
 		sel := m.selected()
 		if sel == nil {
 			return m, nil
 		}
+		m.clearPrompt()
 		m.confirm = cconfirmActivate
 		m.confirmID = sel.ID
 		m.mode = modeConfirm
+		return m, statusTick() // 确认框按键行摇晃
 	default:
-		m.deleteArm = false
+		m.clearPrompt()
 	}
 	return m, nil
 }
@@ -270,7 +297,7 @@ func (m ChatgptModel) currentLabel() string {
 	return "auth.json"
 }
 
-func (m ChatgptModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m ChatgptModel) updateInput(msg tea.Msg) (Manager, tea.Cmd) {
 	key, ok := msg.(tea.KeyMsg)
 	if ok {
 		switch key.String() {
@@ -307,7 +334,7 @@ func (m ChatgptModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m ChatgptModel) updateConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m ChatgptModel) updateConfirm(msg tea.Msg) (Manager, tea.Cmd) {
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -528,14 +555,6 @@ func (m *ChatgptModel) doRemove(id string) error {
 	return st.Save()
 }
 
-func (m *ChatgptModel) setStatus(err error, okText, errPrefix string) {
-	if err != nil {
-		m.status = status{2, errPrefix + ": " + err.Error()}
-	} else {
-		m.status = status{1, okText}
-	}
-}
-
 func expandHome(p string) string {
 	if p == "~" {
 		home, _ := os.UserHomeDir()
@@ -632,7 +651,7 @@ func (m ChatgptModel) View() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(banner(TargetChatGPT))
+	b.WriteString(banner(&cinfo))
 	b.WriteString("\n")
 	b.WriteString(m.currentLine())
 	b.WriteString("\n")
@@ -648,7 +667,12 @@ func (m ChatgptModel) View() string {
 		}
 	}
 	b.WriteString("\n")
-	b.WriteString(m.status.render())
+	if m.status.kind == 4 {
+		// 红色确认提示:左右摇晃
+		b.WriteString(status{4, shakePrefix(m.shakeFrame) + m.status.text}.render())
+	} else {
+		b.WriteString(m.renderStatus())
+	}
 	b.WriteString("\n")
 
 	switch m.mode {
@@ -668,7 +692,7 @@ func (m ChatgptModel) View() string {
 		}
 		text := fmt.Sprintf("将把账号 %s 投影为官方 auth.json(%s)。\n原文件自动备份为 auth.json.bak-<时间戳>。继续?", label, orDash(m.home))
 		keys := "[y] 确认  [n] 取消"
-		b.WriteString("\n" + styleBox.Render(styleWarn.Render(text)+"\n"+keys) + "\n")
+		b.WriteString(m.confirmBox(text, keys))
 	case modeDetail:
 		if sel := m.selected(); sel != nil {
 			b.WriteString("\n" + styleBox.Render(m.detailView(sel)) + "\n")
@@ -680,8 +704,7 @@ func (m ChatgptModel) View() string {
 	}
 
 	// 底部操作栏:左右键选中、回车执行,或直接按对应键
-	b.WriteString("\n" + chipBar(cChips, m.chipIdx, targets[0].accent))
-	b.WriteString("\n" + styleDim.Render("↑/↓ 选条目 · ←/→ 选操作 · 回车执行选中操作 · Esc 返回选择 · q/Q 退出"))
+	b.WriteString("\n" + m.bottomBar(&cinfo, cChips))
 	return b.String()
 }
 
@@ -697,7 +720,7 @@ func (m ChatgptModel) findByID(id string) *gptstore.Account {
 // infoView "m 信息"面板:官方目录与账号库状态。
 func (m ChatgptModel) infoView() string {
 	val := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	accentSt := lipgloss.NewStyle().Foreground(targets[0].accent)
+	accentSt := lipgloss.NewStyle().Foreground(cinfo.accent)
 	authPath := ""
 	if m.home != "" {
 		authPath = gptauth.AuthFilePath(m.home)

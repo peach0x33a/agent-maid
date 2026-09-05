@@ -1,54 +1,77 @@
 package ui
 
 import (
+	"fmt"
+	"time"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"agent-maid/internal/meta"
 )
 
-// targetSelectedMsg 首屏选择完成,携带目标。
-type targetSelectedMsg struct{ target Target }
+// artTickMsg 首屏流光动画的节拍。
+type artTickMsg struct{}
+
+func artTick() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg { return artTickMsg{} })
+}
 
 // SelectModel 首屏:选择要管理的目标软件。
 //
-// 布局:单个外框装下两栏(无卡片接缝),随终端宽度自适应——
-// 宽终端左右两栏大图,中等宽度换小图,窄终端上下两栏;
-// 整体在终端内水平垂直居中。未选中的一栏整体置灰。
+// 布局:单个外框装下所有工具栏位(无卡片接缝),随终端宽度自适应——
+// 宽终端左右并排大图,中等宽度换小图,窄终端上下堆叠;
+// 整体在终端内水平垂直居中。未选中的一栏整体置灰,
+// 选中的 logo 播放流光动画(渐变相位沿对角线循环流动)。
 type SelectModel struct {
+	infos  []*targetInfo // 注册表中各工具的展示信息
 	cursor int
 	width  int
 	height int
+	phase  int // 流光动画当前帧
 }
 
-func NewSelect() SelectModel { return SelectModel{} }
+// NewSelect 从注册表构建首屏。
+func NewSelect(reg []Manager) SelectModel {
+	infos := make([]*targetInfo, len(reg))
+	for i, m := range reg {
+		infos[i] = m.Info()
+	}
+	return SelectModel{infos: infos}
+}
 
-func (m SelectModel) Init() tea.Cmd { return nil }
+func (m SelectModel) Init() tea.Cmd { return artTick() }
 
 func (m SelectModel) Update(msg tea.Msg) (SelectModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
+	case artTickMsg:
+		m.phase++
+		return m, artTick()
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "left", "right", "h", "l", "tab", "up", "down", "j", "k", "shift+tab":
-			m.cursor = 1 - m.cursor // 两个目标,方向键即切换
-		case "1":
-			m.cursor = 0
-		case "2":
-			m.cursor = 1
+			if len(m.infos) > 1 {
+				if msg.String() == "left" || msg.String() == "h" || msg.String() == "up" || msg.String() == "k" {
+					m.cursor = (m.cursor + len(m.infos) - 1) % len(m.infos)
+				} else {
+					m.cursor = (m.cursor + 1) % len(m.infos)
+				}
+			}
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+			if i := int(msg.String()[0] - '1'); i < len(m.infos) {
+				m.cursor = i
+			}
 		case "enter":
-			return m, func() tea.Msg { return targetSelectedMsg{Target(m.cursor + 1)} }
+			return m, func() tea.Msg { return targetSelectedMsg{Index: m.cursor} }
 		}
 	}
 	return m, nil
 }
-
-// SelectedTarget 当前光标对应的目标(供 main 预选后展示)。
-func (m SelectModel) SelectedTarget() Target { return Target(m.cursor + 1) }
 
 func (m SelectModel) View() string {
 	w, h := m.width, m.height
@@ -60,13 +83,17 @@ func (m SelectModel) View() string {
 	}
 
 	// 尺寸自适应:能横排就横排,并尽量用大图
-	small := w < 70
-	cols := m.columns(small)
-	gap := "     "
-	inner := lipgloss.JoinHorizontal(lipgloss.Top, cols[0], gap, cols[1])
-	if w < 52 {
-		// 窄终端:上下两栏
-		inner = lipgloss.JoinVertical(lipgloss.Center, cols[0], "", cols[1])
+	small := w < 74
+	cols := m.columns(small, m.phase)
+
+	var inner string
+	switch {
+	case len(cols) == 1:
+		inner = cols[0]
+	case w >= 74:
+		inner = joinHorizontal(cols, "     ")
+	default:
+		inner = joinVertical(cols, "")
 	}
 
 	// 外框:随终端宽度自适应,内容在框内居中,框在终端内居中
@@ -83,43 +110,48 @@ func (m SelectModel) View() string {
 		Align(lipgloss.Center).
 		Render(inner)
 
+	hint := "←/→ 或 Tab 选择"
+	for i := range m.infos {
+		hint += fmt.Sprintf(" · %d", i+1)
+	}
+	hint += " 直接选 · Enter 进入 · q 退出"
+
 	block := lipgloss.JoinVertical(lipgloss.Center,
-		styleTitle.Render("agent-maid · 账号管家"),
+		styleTitle.Render("Agent Maid |´・ω・)ノ"),
 		styleDim.Render("选择要管理的目标软件"),
 		"",
 		box,
 		"",
-		styleHelp.Render("←/→ 或 Tab 选择 · 1/2 直接选 · Enter 进入 · q 退出"),
+		styleHelp.Render(hint),
 		styleDim.Render(meta.Name+" v"+meta.Version),
 	)
 	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, block)
 }
 
-// columns 渲染两栏内容。选中的一栏:品牌色图标 + 高亮名称;
+// columns 渲染各工具栏位。选中的一栏:品牌色流光图标 + 高亮名称;
 // 未选中一栏整体置灰。
-func (m SelectModel) columns(small bool) [2]string {
-	var out [2]string
-	for i := range targets {
-		t := targets[i]
+func (m SelectModel) columns(small bool, phase int) []string {
+	cols := make([]string, 0, len(m.infos))
+	for i := range m.infos {
+		info := m.infos[i]
 		sel := i == m.cursor
 
-		nameStyle := lipgloss.NewStyle().Bold(true).Foreground(t.accent)
-		textStyle := styleDim
+		nameStyle := lipgloss.NewStyle().Bold(true).Foreground(info.accent)
 		if !sel {
 			nameStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("244"))
 		}
 
 		// 图标作为整块参与排版(渐变半块方块,各行为等宽像素行)
-		artBlock := t.renderArt(small, !sel)
+		artBlock := info.renderArt(small, !sel, phase)
 		artW := lipgloss.Width(artBlock)
-		name := t.name
+		name := info.Name
 		if sel {
 			name = "❯ " + name
 		}
 		lines := []string{
 			nameStyle.Render(name),
-			textStyle.Render(t.desc),
-			textStyle.Render(t.path),
+			styleDim.Render(info.Desc),
+			styleDim.Render(info.Path),
 		}
 		colW := artW
 		for _, line := range lines {
@@ -136,9 +168,39 @@ func (m SelectModel) columns(small bool) [2]string {
 		for _, line := range lines {
 			rendered = append(rendered, lipgloss.PlaceHorizontal(colW, lipgloss.Center, line))
 		}
-		out[i] = joinLines(rendered)
+		cols = append(cols, joinLines(rendered))
 	}
-	return out
+	return cols
+}
+
+func joinHorizontal(cols []string, gap string) string {
+	switch len(cols) {
+	case 0:
+		return ""
+	case 1:
+		return cols[0]
+	}
+	args := make([]string, 0, len(cols)*2-1)
+	args = append(args, cols[0])
+	for _, c := range cols[1:] {
+		args = append(args, gap, c)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, args...)
+}
+
+func joinVertical(cols []string, gap string) string {
+	switch len(cols) {
+	case 0:
+		return ""
+	case 1:
+		return cols[0]
+	}
+	args := make([]string, 0, len(cols)*2-1)
+	args = append(args, cols[0])
+	for _, c := range cols[1:] {
+		args = append(args, gap, c)
+	}
+	return lipgloss.JoinVertical(lipgloss.Center, args...)
 }
 
 func min(a, b int) int {

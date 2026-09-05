@@ -5,6 +5,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -21,23 +22,23 @@ func lipStyle(fg, bg string) lipgloss.Style {
 	return st
 }
 
-// gradAt 在 stops 间做对角线渐变插值,x/y 为像素坐标。
-func gradAt(stops []string, x, y, w, h int) string {
+// gradAt 在 stops 间做对角线渐变插值,x/y 为像素坐标,phase 为循环相位。
+func gradAt(stops []string, x, y, w, h int, phase float64) string {
 	tx, ty := float64(x)/float64(w-1), float64(y)/float64(h-1)
-	t := (tx + ty) / 2
+	t := (tx+ty)/2 + phase
+	t -= math.Floor(t)
 	return sampleStops(stops, t)
 }
 
+// sampleStops 循环采样:stops 首尾相接,t ∈ [0,1) 沿色环插值。
 func sampleStops(stops []string, t float64) string {
 	if len(stops) == 1 {
 		return stops[0]
 	}
-	seg := float64(len(stops)-1) * t
-	i := int(seg)
-	if i >= len(stops)-1 {
-		return stops[len(stops)-1]
-	}
-	return lerpColor(stops[i], stops[i+1], seg-float64(i))
+	seg := float64(len(stops)) * t
+	i := int(seg) % len(stops)
+	f := seg - math.Floor(seg)
+	return lerpColor(stops[i], stops[(i+1)%len(stops)], f)
 }
 
 // lerpColor 十六进制颜色线性插值,#RRGGBB。
@@ -74,8 +75,9 @@ func inkOf(px []string, x, y int) float64 {
 
 // renderHalfblock 把 ink 矩阵渲染为渐变半块方块。
 // px 为 w×h 像素 ink 等级矩阵(0-9),渲染为 w 列 × h/2 行字符。
-// 低于 inkOn 的像素直接不画(不留暗色边缘),实心像素取纯渐变色。
-func renderHalfblock(px []string, stops []string) string {
+// 低于 inkOn 的像素直接不画(不留暗色边缘),实心像素取纯渐变色;
+// phase ∈ [0,1) 使渐变沿对角线流动(用于动画帧)。
+func renderHalfblock(px []string, stops []string, phase float64) string {
 	const inkOn = 0.3
 	w := len(px[0])
 	h := len(px)
@@ -88,14 +90,14 @@ func renderHalfblock(px []string, stops []string) string {
 			case !upOn && !downOn:
 				b.WriteString(" ")
 			case upOn && downOn:
-				fg := gradAt(stops, x, row*2, w, h)
-				bg := gradAt(stops, x, row*2+1, w, h)
+				fg := gradAt(stops, x, row*2, w, h, phase)
+				bg := gradAt(stops, x, row*2+1, w, h, phase)
 				b.WriteString(lipStyle(fg, bg).Render("▀"))
 			case upOn:
-				fg := gradAt(stops, x, row*2, w, h)
+				fg := gradAt(stops, x, row*2, w, h, phase)
 				b.WriteString(lipStyle(fg, "").Render("▀"))
 			default: // 仅下半实:前景与背景同色,只显示下半块
-				bg := gradAt(stops, x, row*2+1, w, h)
+				bg := gradAt(stops, x, row*2+1, w, h, phase)
 				b.WriteString(lipStyle(bg, bg).Render("▀"))
 			}
 		}

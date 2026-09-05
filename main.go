@@ -3,14 +3,15 @@
 // 用法:
 //
 //	agent-maid              # 进入 TUI,首屏选择目标软件
-//	agent-maid chatgpt      # 直接进入 ChatGPT 账号切换器
-//	agent-maid zcode        # 直接进入 ZCode 账号切换器
+//	agent-maid chatgpt      # 直接进入 ChatGPT 账号管理
+//	agent-maid zcode        # 直接进入 ZCode 账号管理
 //	agent-maid version      # 显示版本
 package main
 
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -19,18 +20,19 @@ import (
 )
 
 func main() {
-	pre := ui.TargetNone
+	pre := ""
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "chatgpt", "gpt":
-			pre = ui.TargetChatGPT
+			pre = "chatgpt"
 		case "zcode", "z":
-			pre = ui.TargetZCode
+			pre = "zcode"
 		case "version", "--version", "-v":
 			fmt.Printf("%s %s\n", meta.Name, meta.Version)
 			return
 		default:
-			fmt.Fprintf(os.Stderr, "未知参数 %q\n可用: chatgpt | zcode | version\n", os.Args[1])
+			fmt.Fprintf(os.Stderr, "未知参数 %q\n可用: %s | version\n",
+				os.Args[1], strings.Join(ui.TargetKeys(), " | "))
 			os.Exit(2)
 		}
 	}
