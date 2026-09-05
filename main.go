@@ -24,7 +24,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"agent-maid/internal/antigravity"
-	"agent-maid/internal/background"
 	"agent-maid/internal/meta"
 	"agent-maid/internal/notify"
 	"agent-maid/internal/ui"
@@ -38,11 +37,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "用法: agent-maid --wait-apply <zcode> <槽位名> [重启路径]")
 			os.Exit(2)
 		}
-		relaunch := ""
-		if len(os.Args) > 4 {
-			relaunch = os.Args[4]
-		}
-		if err := runWaitApply(os.Args[2], os.Args[3], relaunch); err != nil {
+		if err := runWaitApply(os.Args[2], os.Args[3]); err != nil {
 			_ = notify.Show("Agent Maid", "后台切换失败: "+err.Error())
 			fmt.Fprintf(os.Stderr, "后台切换失败: %v\n", err)
 			os.Exit(1)
@@ -80,7 +75,7 @@ func main() {
 }
 
 // runWaitApply 等待目标软件完全退出后切换槽位,并发系统通知。
-func runWaitApply(target, slot, relaunch string) error {
+func runWaitApply(target, slot string) error {
 	switch target {
 	case "zcode":
 		if err := zcode.WaitZcodeExit(context.Background(), 500*time.Millisecond); err != nil {
@@ -95,7 +90,6 @@ func runWaitApply(target, slot, relaunch string) error {
 			msg += "(原账号已自动备份到 " + backup + ")"
 		}
 		_ = notify.Show("Agent Maid", msg)
-		return relaunchAfter(relaunch)
 	case "antigravity":
 		for antigravity.Running() {
 			time.Sleep(500 * time.Millisecond)
@@ -109,16 +103,8 @@ func runWaitApply(target, slot, relaunch string) error {
 			msg += "(原账号已自动备份到 " + backup + ")"
 		}
 		_ = notify.Show("Agent Maid", msg)
-		return relaunchAfter(relaunch)
 	default:
 		return fmt.Errorf("未知目标 %q", target)
 	}
-}
-
-// relaunchAfter 替换完成后按需重启目标软件。
-func relaunchAfter(path string) error {
-	if path == "" {
-		return nil
-	}
-	return background.Launch(path)
+	return nil
 }

@@ -13,7 +13,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"agent-maid/internal/antigravity"
-	"agent-maid/internal/background"
 )
 
 // ainfo Antigravity 的展示信息。
@@ -32,14 +31,13 @@ var ainfo = targetInfo{
 
 // aChips Antigravity 界面底部操作栏(与其他工具同一套交互模式)。
 var aChips = []chip{
-	{"enter", "切换"},
-	{"s", "保存"},
-	{"S", "快存"},
-	{"r", "重命名"},
-	{"d", "删除"},
-	{"N", "登出"},
-	{"m", "信息"},
-	{"?", "帮助"},
+	{"enter", "[↵] 切换"},
+	{"s", "[S]ave 保存"},
+	{"r", "[R]ename 重命名"},
+	{"d", "[D]elete 删除"},
+	{"n", "[N]ew 新建"},
+	{"m", "[M]eta 信息"},
+	{"?", "[?]Help 帮助"},
 }
 
 type aconfirm int
@@ -51,19 +49,19 @@ const (
 type AntigravityModel struct {
 	baseModel
 
-	svc     *antigravity.Service
-	slots   []antigravity.Slot
-	cursor  int
-	current antigravity.CurrentInfo
-	agRun   bool
+	svc        *antigravity.Service
+	positioned bool // 首次加载数据后已把光标定位到使用中的账号
+	slots      []antigravity.Slot
+	cursor     int
+	current    antigravity.CurrentInfo
+	agRun      bool
 
 	input      textinput.Model
 	inputFor   inputPurpose
 	renameFrom string
 
-	confirm      aconfirm
-	confirmTx    string
-	relaunchPath string // 检测到的 Antigravity 启动路径
+	confirm   aconfirm
+	confirmTx string
 }
 
 // NewAntigravity 创建 Antigravity 管理器。
@@ -85,10 +83,9 @@ func (m AntigravityModel) Init() tea.Cmd { return m.refresh }
 // ───────────────────────── 数据 ─────────────────────────
 
 type aLoadedMsg struct {
-	slots     []antigravity.Slot
-	current   antigravity.CurrentInfo
-	agRun     bool
-	launchCmd string
+	slots   []antigravity.Slot
+	current antigravity.CurrentInfo
+	agRun   bool
 }
 
 type aApplyResultMsg struct {
@@ -101,14 +98,25 @@ type aRefreshMsg struct{}
 
 func (m AntigravityModel) refresh() tea.Msg {
 	slots, _ := m.svc.Store.List()
-	return aLoadedMsg{slots: slots, current: m.svc.Current(), agRun: antigravity.Running(), launchCmd: antigravity.LaunchCmd()}
+	return aLoadedMsg{slots: slots, current: m.svc.Current(), agRun: antigravity.Running()}
 }
 
 func (m *AntigravityModel) applyLoaded(lm aLoadedMsg) {
 	m.slots = lm.slots
 	m.current = lm.current
 	m.agRun = lm.agRun
-	m.relaunchPath = lm.launchCmd
+	// 首次加载数据时,把光标定位到使用中的账号
+	if !m.positioned {
+		m.positioned = true
+		if m.current.Exists {
+			for i := range m.slots {
+				if antigravity.EqualCreds(m.current.Creds, m.slots[i].OAuthCreds) {
+					m.cursor = i
+					break
+				}
+			}
+		}
+	}
 	m.clampCursor()
 }
 
@@ -234,7 +242,7 @@ func (m AntigravityModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
 // dispatch 统一的动作分发:字母键与操作栏回车共用。
 func (m AntigravityModel) dispatch(key string) (Manager, tea.Cmd) {
 	switch key {
-	case "s": // 保存当前账号
+	case "s", "S": // 保存当前账号
 		if !m.current.Exists {
 			m.status = status{2, "没有找到 oauth_creds.json,无账号可保存"}
 			return m, nil
@@ -246,17 +254,7 @@ func (m AntigravityModel) dispatch(key string) (Manager, tea.Cmd) {
 		m.input.CursorEnd()
 		m.input.Focus()
 		return m, textinput.Blink
-	case "S": // 快速保存
-		if !m.current.Exists {
-			m.status = status{2, "没有找到 oauth_creds.json,无账号可保存"}
-			return m, nil
-		}
-		m.clearPrompt()
-		name := time.Now().Format("snapshot-0102-150405")
-		slot, err := m.svc.SaveCurrent(name, false)
-		m.setStatus(err, "已保存到槽位 "+describeASlot(slot), "保存失败")
-		return m, func() tea.Msg { return aRefreshMsg{} }
-	case "r": // 重命名
+	case "r", "R": // 重命名
 		sel := m.selected()
 		if sel == nil {
 			return m, nil
@@ -268,7 +266,7 @@ func (m AntigravityModel) dispatch(key string) (Manager, tea.Cmd) {
 		m.input.SetValue(sel.Name)
 		m.input.Focus()
 		return m, textinput.Blink
-	case "d": // 删除:再按一次 d 确认,5s 不动自动撤下
+	case "d", "D": // 删除:再按一次 d 确认,5s 不动自动撤下
 		sel := m.selected()
 		if sel == nil {
 			return m, nil
@@ -281,7 +279,7 @@ func (m AntigravityModel) dispatch(key string) (Manager, tea.Cmd) {
 		}
 		cmd := m.armPrompt(sel.Name, fmt.Sprintf("再按一次 d 删除槽位 %q", sel.Name))
 		return m, cmd
-	case "N": // 登出:清空本地凭据(自动备份),让 Antigravity 回到未登录态
+	case "n", "N": // 登出:清空本地凭据(自动备份),让 Antigravity 回到未登录态
 		if !m.current.Exists {
 			m.status = status{2, "当前没有登录凭据,无需登出"}
 			return m, nil
@@ -301,11 +299,6 @@ func (m AntigravityModel) dispatch(key string) (Manager, tea.Cmd) {
 			if backup != "" {
 				text = "已清空本地凭据(原账号已自动备份到 " + backup + "),可重新登录后按 s 保存"
 			}
-			if autoRelaunch && m.relaunchPath != "" {
-				if lerr := background.Launch(m.relaunchPath); lerr == nil {
-					text += styleOk.Render(",已启动 Antigravity")
-				}
-			}
 			m.status = status{1, text}
 			return m, func() tea.Msg { return aRefreshMsg{} }
 		}
@@ -317,7 +310,7 @@ func (m AntigravityModel) dispatch(key string) (Manager, tea.Cmd) {
 		}
 		cmd := m.armPrompt("N", text)
 		return m, cmd
-	case "m":
+	case "m", "M":
 		m.clearPrompt()
 		m.mode = modeMachine
 	case "?", "h":
@@ -330,7 +323,7 @@ func (m AntigravityModel) dispatch(key string) (Manager, tea.Cmd) {
 		}
 		if m.confirmSwitch() {
 			backup, err := m.svc.Apply(sel.Name)
-			m.setStatus(err, describeApply(sel.Name, backup)+m.relaunchSuffix(), "切换失败")
+			m.setStatus(err, describeApply(sel.Name, backup), "切换失败")
 			return m, func() tea.Msg { return aRefreshMsg{} }
 		}
 		m.armSwitch(sel.Name)
@@ -419,17 +412,6 @@ func describeASlot(slot antigravity.Slot) string {
 	return fmt.Sprintf("%q(%s)", slot.Name, email)
 }
 
-// relaunchSuffix 按偏好自动重启 Antigravity,返回状态后缀。
-func (m AntigravityModel) relaunchSuffix() string {
-	if !autoRelaunch || m.relaunchPath == "" {
-		return ""
-	}
-	if err := background.Launch(m.relaunchPath); err != nil {
-		return styleWarn.Render("(自动重启 Antigravity 失败: " + err.Error() + ")")
-	}
-	return styleOk.Render(",已启动 Antigravity")
-}
-
 func describeApply(name, backup string) string {
 	text := "已切换到槽位 " + name
 	if backup != "" {
@@ -475,8 +457,8 @@ func (m AntigravityModel) slotRow(i int) string {
 	case inUse:
 		mark = " " + badgeInUse()
 	}
-	meta := orDefault(slot.Email, "未知账号")
-	return fmt.Sprintf("%s%s %s%s", cursor, nameStyle.Render(fmt.Sprintf("%-26s", name)), styleDim.Render(meta), mark)
+	meta := orDefault(slot.Email, "未知账号") + " " + styleDim.Render(shortTime(slot.LastUsedAt))
+	return fmt.Sprintf("%s%s %s%s", cursor, nameStyle.Render(fmt.Sprintf("%-26s", name)), meta, mark)
 }
 
 func (m AntigravityModel) View() string {
@@ -513,7 +495,7 @@ func (m AntigravityModel) View() string {
 		if m.inputFor == inputRename {
 			purpose = "重命名槽位 " + m.renameFrom
 		}
-		b.WriteString("\n" + styleBox.Render(purpose+"\n"+m.input.View()) + "\n")
+		b.WriteString("\n" + m.centerBox(styleBox.Render(purpose+"\n"+m.input.View())) + "\n")
 	case modeConfirm:
 		var text, keys string
 		switch m.confirm {
@@ -523,9 +505,9 @@ func (m AntigravityModel) View() string {
 		}
 		b.WriteString(m.confirmBox(text, keys))
 	case modeHelp:
-		b.WriteString("\n" + styleBox.Render(aHelpView()) + "\n")
+		b.WriteString("\n" + m.centerBox(styleBox.Render(aHelpView())) + "\n")
 	case modeMachine:
-		b.WriteString("\n" + styleBox.Render(aInfoView(m)) + "\n")
+		b.WriteString("\n" + m.centerBox(styleBox.Render(aInfoView(m))) + "\n")
 	}
 
 	b.WriteString("\n" + m.bottomBar(&ainfo, aChips))

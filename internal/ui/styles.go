@@ -2,6 +2,8 @@
 package ui
 
 import (
+	"time"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -27,3 +29,22 @@ var (
 type backMsg struct{}
 
 func backCmd() tea.Msg { return backMsg{} }
+
+// shortTime 列表用的短时间显示(无记录返回 —)。
+func shortTime(t *time.Time) string {
+	if t == nil {
+		return "—"
+	}
+	return t.Local().Format("01-02 15:04")
+}
+
+// shortID8 取 ID 前 8 位。
+func shortID8(id string) string {
+	if id == "" {
+		return "—"
+	}
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}

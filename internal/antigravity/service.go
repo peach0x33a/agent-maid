@@ -77,7 +77,8 @@ func (s *Service) Apply(name string) (autoBackup string, err error) {
 	switch {
 	case err == nil:
 		if EqualCreds(current, slot.OAuthCreds) && EqualAccounts(mustReadAccounts(), slot.Accounts) {
-			return "", nil // 内容一致,无需切换
+			_ = s.Store.TouchLastUsed(name, time.Now())
+			return "", nil
 		}
 		if !s.currentCovered(current) {
 			backupName := fmt.Sprintf("auto-%s", time.Now().Format("0102-150405"))
@@ -104,6 +105,7 @@ func (s *Service) Apply(name string) (autoBackup string, err error) {
 			return autoBackup, fmt.Errorf("写入账号文件失败: %w", err)
 		}
 	}
+	_ = s.Store.TouchLastUsed(name, time.Now())
 	return autoBackup, nil
 }
 

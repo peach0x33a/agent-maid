@@ -32,16 +32,25 @@ type SelectModel struct {
 	phase  int // 流光动画当前帧
 }
 
-// NewSelect 从注册表构建首屏。
-func NewSelect(reg []Manager) SelectModel {
+// NewSelect 从注册表构建首屏。last 为上次使用的工具 Key,光标默认停在它上面。
+func NewSelect(reg []Manager, last string) SelectModel {
 	infos := make([]*targetInfo, len(reg))
+	cursor := 0
 	for i, m := range reg {
 		infos[i] = m.Info()
+		if last != "" && infos[i].Key == last {
+			cursor = i
+		}
 	}
-	return SelectModel{infos: infos}
+	return SelectModel{infos: infos, cursor: cursor}
 }
 
-func (m SelectModel) Init() tea.Cmd { return artTick() }
+func (m SelectModel) Init() tea.Cmd {
+	if noAnim {
+		return nil
+	}
+	return artTick()
+}
 
 func (m SelectModel) Update(msg tea.Msg) (SelectModel, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -49,6 +58,9 @@ func (m SelectModel) Update(msg tea.Msg) (SelectModel, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case artTickMsg:
+		if noAnim {
+			return m, nil
+		}
 		m.phase++
 		return m, artTick()
 	case tea.KeyMsg:
@@ -67,6 +79,8 @@ func (m SelectModel) Update(msg tea.Msg) (SelectModel, tea.Cmd) {
 			if i := int(msg.String()[0] - '1'); i < len(m.infos) {
 				m.cursor = i
 			}
+		case "s", "S":
+			return m, func() tea.Msg { return settingsOpenMsg{} }
 		case "enter":
 			return m, func() tea.Msg { return targetSelectedMsg{Index: m.cursor} }
 		}
@@ -83,22 +97,23 @@ func (m SelectModel) View() string {
 		h = 24
 	}
 
-	// 尺寸自适应:优先大图横排,放不下换小图横排,再放不下纵向堆叠。
-	// 可用宽度要扣掉外框边框(2)与左右内边距(6),否则行尾会折行错位。
+	// 轮播布局:选中项恒居中(大图),两侧是上一项/下一项(小图,缩小 20%,
+	// 置灰),列表无限循环;窄终端放不下时只显示选中项。
 	const boxChrome = 8
-	cols := m.columns(false, m.phase)
-	if totalWidth(cols) > w-boxChrome {
-		cols = m.columns(true, m.phase)
-	}
-
+	n := len(m.infos)
+	center := m.slot(m.cursor, false, false, m.phase)
 	var inner string
-	switch {
-	case len(cols) == 1:
-		inner = cols[0]
-	case totalWidth(cols) <= w-boxChrome:
-		inner = joinHorizontal(cols, "     ")
-	default:
-		inner = joinVertical(cols, "")
+	if n >= 2 {
+		left := m.slot((m.cursor+n-1)%n, true, true, 0)
+		right := m.slot((m.cursor+1)%n, true, true, 0)
+		row := joinHorizontal([]string{left, center, right}, "     ")
+		if totalWidth([]string{left, center, right}) <= w-boxChrome {
+			inner = row
+		} else {
+			inner = center
+		}
+	} else {
+		inner = center
 	}
 
 	// 外框:至少容纳内容+内边距(绝不会被折行);宽终端舒展,上限 108
@@ -126,7 +141,7 @@ func (m SelectModel) View() string {
 		}
 		hint += " · " + strings.Join(digits, "/") + " 直接选"
 	}
-	hint += " · Enter 进入 · q 退出"
+	hint += " · Enter 进入 · S 设置"
 
 	title := "Agent Maid |´・ω・)ノ"
 	if plainMode {
@@ -144,49 +159,46 @@ func (m SelectModel) View() string {
 	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, block)
 }
 
-// columns 渲染各工具栏位。选中的一栏:品牌色流光图标 + 高亮名称;
-// 未选中一栏整体置灰。
-func (m SelectModel) columns(small bool, phase int) []string {
-	cols := make([]string, 0, len(m.infos))
-	for i := range m.infos {
-		info := m.infos[i]
-		sel := i == m.cursor
+// slot 渲染单个工具栏位。dim=true 为两侧项:置灰、小图、仅显示名称;
+// 选中项:品牌色流光图标 + 夹角标名称 + 说明/路径。
+func (m SelectModel) slot(idx int, small, dim bool, phase int) string {
+	info := m.infos[idx]
 
-		nameStyle := lipgloss.NewStyle().Bold(true).Foreground(info.accent)
-		if !sel {
-			nameStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("244"))
-		}
+	artBlock := info.renderArt(small, dim, phase)
+	artW := lipgloss.Width(artBlock)
 
-		// 图标作为整块参与排版(渐变半块方块,各行为等宽像素行)
-		artBlock := info.renderArt(small, !sel, phase)
-		artW := lipgloss.Width(artBlock)
-		name := info.Name
-		if sel {
-			name = "❯ " + name
-		}
-		lines := []string{
-			nameStyle.Render(name),
-			styleDim.Render(info.Desc),
-			styleDim.Render(info.Path),
-		}
-		colW := artW
-		for _, line := range lines {
-			if lw := lipgloss.Width(line); lw > colW {
-				colW = lw
-			}
-		}
-
-		var rendered []string
-		for _, line := range splitLines(artBlock) {
-			rendered = append(rendered, lipgloss.PlaceHorizontal(colW, lipgloss.Center, line))
-		}
-		rendered = append(rendered, "")
-		for _, line := range lines {
-			rendered = append(rendered, lipgloss.PlaceHorizontal(colW, lipgloss.Center, line))
-		}
-		cols = append(cols, joinLines(rendered))
+	name := info.Name
+	nameStyle := lipgloss.NewStyle().Bold(true).Foreground(info.accent)
+	if dim {
+		nameStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("244"))
+	} else if plainMode {
+		name = "> " + name + " <"
+	} else {
+		name = "❯ " + name + " ❮"
 	}
-	return cols
+
+	lines := []string{nameStyle.Render(name)}
+	if !dim {
+		lines = append(lines,
+			styleDim.Render(info.Desc),
+			styleDim.Render(info.Path))
+	}
+	colW := artW
+	for _, line := range lines {
+		if lw := lipgloss.Width(line); lw > colW {
+			colW = lw
+		}
+	}
+
+	var rendered []string
+	for _, line := range splitLines(artBlock) {
+		rendered = append(rendered, lipgloss.PlaceHorizontal(colW, lipgloss.Center, line))
+	}
+	rendered = append(rendered, "")
+	for _, line := range lines {
+		rendered = append(rendered, lipgloss.PlaceHorizontal(colW, lipgloss.Center, line))
+	}
+	return joinLines(rendered)
 }
 
 func joinHorizontal(cols []string, gap string) string {
@@ -202,21 +214,6 @@ func joinHorizontal(cols []string, gap string) string {
 		args = append(args, gap, c)
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, args...)
-}
-
-func joinVertical(cols []string, gap string) string {
-	switch len(cols) {
-	case 0:
-		return ""
-	case 1:
-		return cols[0]
-	}
-	args := make([]string, 0, len(cols)*2-1)
-	args = append(args, cols[0])
-	for _, c := range cols[1:] {
-		args = append(args, gap, c)
-	}
-	return lipgloss.JoinVertical(lipgloss.Center, args...)
 }
 
 // totalWidth 计算横排总宽度(含栏间距 5)。

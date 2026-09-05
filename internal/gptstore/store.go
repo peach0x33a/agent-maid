@@ -34,6 +34,7 @@ type Account struct {
 	ImportedAt       time.Time         `json:"imported_at"`
 	AccessExpiresAt  *time.Time        `json:"access_expires_at,omitempty"`
 	Refreshable      bool              `json:"refreshable"`
+	LastUsedAt       *time.Time        `json:"last_used_at,omitempty"` // 最近一次激活时间
 	IDTokenSynthetic bool              `json:"id_token_synthetic,omitempty"`
 	IDTokenReplaced  bool              `json:"id_token_replaced,omitempty"`
 	Tokens           gptsession.Tokens `json:"tokens"`

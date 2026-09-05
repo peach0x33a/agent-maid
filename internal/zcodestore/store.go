@@ -25,7 +25,8 @@ type Slot struct {
 	Name           string            `json:"name"`
 	CreatedAt      time.Time         `json:"createdAt"`
 	UpdatedAt      time.Time         `json:"updatedAt"`
-	KeyFingerprint string            `json:"keyFingerprint"` // 保存时所用密钥指纹
+	LastUsedAt     *time.Time        `json:"lastUsedAt,omitempty"` // 最近一次切换启用的时间
+	KeyFingerprint string            `json:"keyFingerprint"`       // 保存时所用密钥指纹
 	Meta           zcode.AccountMeta `json:"meta"`
 	Credentials    zcode.Credentials `json:"credentials"`
 }
@@ -152,6 +153,17 @@ func (s *Store) Save(name string, slot Slot) (Slot, error) {
 		return Slot{}, err
 	}
 	return slot, nil
+}
+
+// TouchLastUsed 更新槽位的最后使用时间。
+func (s *Store) TouchLastUsed(name string, t time.Time) error {
+	slot, err := s.Get(name)
+	if err != nil {
+		return err
+	}
+	slot.LastUsedAt = &t
+	_, err = s.Save(name, slot)
+	return err
 }
 
 // Delete 删除槽位。

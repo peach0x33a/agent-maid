@@ -19,12 +19,13 @@ import (
 
 // Slot 一个账号槽位。
 type Slot struct {
-	Name       string    `json:"name"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
-	Email      string    `json:"email"` // 展示标签(来自 id_token/active)
-	OAuthCreds Creds     `json:"oauthCreds"`
-	Accounts   Accounts  `json:"googleAccounts"`
+	Name       string     `json:"name"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"` // 最近一次切换启用的时间
+	Email      string     `json:"email"`                // 展示标签(来自 id_token/active)
+	OAuthCreds Creds      `json:"oauthCreds"`
+	Accounts   Accounts   `json:"googleAccounts"`
 }
 
 // Store 槽位存储,每槽位一个文件。
@@ -136,6 +137,17 @@ func (s *Store) Save(name string, slot Slot) (Slot, error) {
 		return Slot{}, err
 	}
 	return slot, nil
+}
+
+// TouchLastUsed 更新槽位的最后使用时间。
+func (s *Store) TouchLastUsed(name string, t time.Time) error {
+	slot, err := s.Get(name)
+	if err != nil {
+		return err
+	}
+	slot.LastUsedAt = &t
+	_, err = s.Save(name, slot)
+	return err
 }
 
 // Delete 删除槽位。

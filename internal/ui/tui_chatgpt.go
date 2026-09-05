@@ -40,21 +40,21 @@ var cinfo = targetInfo{
 
 // cChips ChatGPT 界面底部操作栏(与 ZCode 界面同一套交互模式)。
 var cChips = []chip{
-	{"enter", "切换"},
-	{"s", "保存"},
-	{"S", "快存"},
-	{"i", "导入"},
-	{"r", "重命名"},
-	{"d", "删除"},
-	{"N", "登出"},
-	{"m", "信息"},
-	{"?", "帮助"},
+	{"enter", "[↵] 切换"},
+	{"s", "[S]ave 保存"},
+	{"i", "[I]mport 导入"},
+	{"r", "[R]ename 重命名"},
+	{"d", "[D]elete 删除"},
+	{"n", "[N]ew 新建"},
+	{"m", "[M]eta 信息"},
+	{"?", "[?]Help 帮助"},
 }
 
 type ChatgptModel struct {
 	baseModel
 
-	loadErr error
+	loadErr    error
+	positioned bool // 首次加载数据后已把光标定位到使用中的账号
 
 	accounts []*gptstore.Account
 	activeID string
@@ -213,14 +213,14 @@ func (m ChatgptModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
 // dispatch 统一的动作分发:字母键与操作栏回车共用。
 func (m ChatgptModel) dispatch(key string) (Manager, tea.Cmd) {
 	switch key {
-	case "i": // 导入 JSON
+	case "i", "I": // 导入 JSON
 		m.clearPrompt()
 		m.mode = modeInput
 		m.inputFor = inputImport
 		m.input.SetValue("")
 		m.input.Focus()
 		return m, textinput.Blink
-	case "s": // 保存当前凭据到账号库(输入显示名)
+	case "s", "S": // 保存当前凭据到账号库(输入显示名)
 		m.clearPrompt()
 		m.mode = modeInput
 		m.inputFor = inputGSave
@@ -228,12 +228,7 @@ func (m ChatgptModel) dispatch(key string) (Manager, tea.Cmd) {
 		m.input.Placeholder = "账号显示名(回车用默认:" + m.currentLabel() + ")"
 		m.input.Focus()
 		return m, textinput.Blink
-	case "S": // 快存当前凭据(自动命名)
-		m.clearPrompt()
-		text, err := m.saveCurrent("")
-		m.setStatus(err, text, "保存失败")
-		return m, func() tea.Msg { return cRefreshMsg{} }
-	case "r": // 重命名选中账号
+	case "r", "R": // 重命名选中账号
 		sel := m.selected()
 		if sel == nil {
 			return m, nil
@@ -245,7 +240,7 @@ func (m ChatgptModel) dispatch(key string) (Manager, tea.Cmd) {
 		m.input.Placeholder = "账号显示名"
 		m.input.Focus()
 		return m, textinput.Blink
-	case "d": // 删除:再按一次 d 确认,5s 不动自动撤下
+	case "d", "D": // 删除:再按一次 d 确认,5s 不动自动撤下
 		sel := m.selected()
 		if sel == nil {
 			return m, nil
@@ -258,7 +253,7 @@ func (m ChatgptModel) dispatch(key string) (Manager, tea.Cmd) {
 		}
 		cmd := m.armPrompt(sel.ID, fmt.Sprintf("再按一次 d 删除账号 %q", sel.Label))
 		return m, cmd
-	case "N": // 登出:清空本地 auth.json(账号保留在账号库)
+	case "n", "N": // 登出:清空本地 auth.json(账号保留在账号库)
 		if m.current == nil {
 			m.status = status{2, "当前未登录,无需登出"}
 			return m, nil
@@ -284,7 +279,7 @@ func (m ChatgptModel) dispatch(key string) (Manager, tea.Cmd) {
 		}
 		cmd := m.armPrompt("N", text)
 		return m, cmd
-	case "m":
+	case "m", "M":
 		m.clearPrompt()
 		m.mode = modeMachine
 	case "?", "h":
@@ -567,14 +562,14 @@ func (m *ChatgptModel) doActivate(id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	backup, _, err := gptauth.WriteAuthFile(home, merged)
-	if err != nil {
+	if _, err := gptauth.WriteAuthFile(home, merged); err != nil {
 		return "", err
 	}
+	// 记录最后激活时间
+	now := time.Now().UTC()
+	acc.LastUsedAt = &now
+	_ = st.Save()
 	text := "已激活 " + acc.Label + ",已写入 Codex 凭据(" + gptauth.AuthFilePath(home) + ")"
-	if backup != "" {
-		text += "(原凭据备份: " + filepath.Base(backup) + ")"
-	}
 	return text, nil
 }
 
@@ -722,11 +717,12 @@ func (m ChatgptModel) accountRow(i int) string {
 	}
 	plan := orDash(a.PlanType)
 	source := a.SourceFormat
-	return fmt.Sprintf("%s%s %s %s%s%s",
+	return fmt.Sprintf("%s%s %s %s %s%s%s",
 		cursor,
-		nameStyle.Render(fmt.Sprintf("%-32s", name)),
+		nameStyle.Render(fmt.Sprintf("%-30s", name)),
 		styleDim.Render(fmt.Sprintf("%-8s", plan)),
 		styleDim.Render(fmt.Sprintf("[%s]", source)),
+		styleDim.Render(shortID8(a.AccountID))+" "+styleDim.Render(shortTime(a.LastUsedAt)),
 		mark, warn)
 }
 
@@ -771,15 +767,15 @@ func (m ChatgptModel) View() string {
 		} else if m.inputFor == inputGRename {
 			purpose = "重命名账号"
 		}
-		b.WriteString("\n" + styleBox.Render(purpose+"\n"+m.input.View()) + "\n")
+		b.WriteString("\n" + m.centerBox(styleBox.Render(purpose+"\n"+m.input.View())) + "\n")
 	case modeDetail:
 		if sel := m.selected(); sel != nil {
-			b.WriteString("\n" + styleBox.Render(m.detailView(sel)) + "\n")
+			b.WriteString("\n" + m.centerBox(styleBox.Render(m.detailView(sel))) + "\n")
 		}
 	case modeHelp:
-		b.WriteString("\n" + styleBox.Render(cHelpView()) + "\n")
+		b.WriteString("\n" + m.centerBox(styleBox.Render(cHelpView())) + "\n")
 	case modeMachine:
-		b.WriteString("\n" + styleBox.Render(m.infoView()) + "\n")
+		b.WriteString("\n" + m.centerBox(styleBox.Render(m.infoView())) + "\n")
 	}
 
 	// 底部操作栏:左右键选中、回车执行,或直接按对应键

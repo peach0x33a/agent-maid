@@ -72,25 +72,6 @@ func isZcodeProc(argv []string) bool {
 	return false
 }
 
-// LaunchCmd 从运行中的进程里推断适合重新启动 ZCode 的命令(Electron 主
-// 进程没有 --type= 参数);未检测到时返回空串。
-func LaunchCmd() string {
-	for _, p := range ZCodeProcs() {
-		argv := strings.Fields(p.Cmd)
-		main := true
-		for _, a := range argv[1:] {
-			if strings.HasPrefix(a, "--type=") {
-				main = false
-				break
-			}
-		}
-		if main {
-			return argv[0]
-		}
-	}
-	return ""
-}
-
 // ZCodeRunning 是否有 ZCode 进程在运行。
 func ZCodeRunning() bool { return len(ZCodeProcs()) > 0 }
 

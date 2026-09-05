@@ -1,11 +1,8 @@
 package gptauth
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -91,82 +88,30 @@ func TestMergeAuthFileInvalidExistingStartsFresh(t *testing.T) {
 	}
 }
 
-func TestWriteAuthFileBackupAndPermissions(t *testing.T) {
+func TestWriteAuthFileIdempotent(t *testing.T) {
 	home := t.TempDir()
 	first, err := BuildAuthFile(Tokens{IDToken: "a", AccessToken: "a", RefreshToken: "a", AccountID: "a"}, time.Unix(0, 0).UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
-	backup, changed, err := WriteAuthFile(home, first)
-	if err != nil || !changed || backup != "" {
-		t.Fatalf("fresh write: backup=%q changed=%v err=%v", backup, changed, err)
+
+	changed, err := WriteAuthFile(home, first)
+	if err != nil || !changed {
+		t.Fatalf("fresh write: changed=%v err=%v", changed, err)
 	}
 
-	second, err := BuildAuthFile(testTokens, time.Unix(0, 0).UTC())
-	if err != nil {
-		t.Fatal(err)
+	// 完全相同的内容是 no-op
+	changed, err = WriteAuthFile(home, first)
+	if err != nil || changed {
+		t.Fatalf("idempotent write: changed=%v err=%v", changed, err)
 	}
-	backup, changed, err = WriteAuthFile(home, second)
-	if err != nil || !changed {
-		t.Fatalf("second write: changed=%v err=%v", changed, err)
-	}
-	if backup == "" {
-		t.Fatal("expected a backup of the replaced file")
-	}
-	saved, err := os.ReadFile(backup)
-	if err != nil {
-		t.Fatalf("backup unreadable: %v", err)
-	}
-	if !bytes.Equal(bytes.TrimSpace(saved), bytes.TrimSpace(first)) {
-		t.Error("backup does not contain the previous credentials")
-	}
+
 	info, err := os.Stat(AuthFilePath(home))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("auth.json perm = %o, want 600", perm)
-	}
-	backupInfo, err := os.Stat(backup)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := backupInfo.Mode().Perm(); perm != 0o600 {
-		t.Errorf("backup perm = %o, want 600", perm)
-	}
-
-	// Writing identical bytes is a no-op (no backup churn).
-	_, changed, err = WriteAuthFile(home, second)
-	if err != nil || changed {
-		t.Fatalf("idempotent write: changed=%v err=%v", changed, err)
-	}
-}
-
-func TestWriteAuthFilePrunesOldBackups(t *testing.T) {
-	home := t.TempDir()
-	seed, err := BuildAuthFile(Tokens{IDToken: "seed", AccessToken: "seed", RefreshToken: "seed", AccountID: "seed"}, time.Unix(0, 0).UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := WriteAuthFile(home, seed); err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 14; i++ {
-		name := filepath.Join(home, fmt.Sprintf("auth.json.bak-20260830-0000%02d", i))
-		if err := os.WriteFile(name, []byte("old"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	data, err := BuildAuthFile(testTokens, time.Unix(0, 0).UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, changed, err := WriteAuthFile(home, data); err != nil || !changed {
-		t.Fatalf("write: changed=%v err=%v", changed, err)
-	}
-	matches, _ := filepath.Glob(filepath.Join(home, "auth.json.bak-*"))
-	if len(matches) != backupKeep {
-		t.Errorf("backups after prune = %d, want %d", len(matches), backupKeep)
 	}
 }
 
@@ -206,7 +151,7 @@ func TestReadCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := WriteAuthFile(home, data); err != nil {
+	if _, err := WriteAuthFile(home, data); err != nil {
 		t.Fatal(err)
 	}
 	current, err = ReadCurrent(home)

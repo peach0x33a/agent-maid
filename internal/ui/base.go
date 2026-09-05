@@ -67,9 +67,10 @@ func (s status) render() string {
 // ───────────────────────── 底部操作栏 ─────────────────────────
 
 // chip 底部操作栏的一个操作项(可直接按 key 触发,也可左右键选中后回车)。
+// disp 为展示文本,形如 "[S]ave 保存"(键字母在方括号内高亮)。
 type chip struct {
-	key   string
-	label string
+	key  string
+	disp string
 }
 
 // chipBar 渲染操作栏,sel 为选中项(高亮),accent 为平台强调色。
@@ -79,12 +80,17 @@ func chipBar(chips []chip, sel int, accent lipgloss.Color) string {
 		if i == sel {
 			st := lipgloss.NewStyle().Bold(true).
 				Foreground(lipgloss.Color("#15151E")).Background(accent)
-			parts = append(parts, st.Render(" "+c.key+" "+c.label+" "))
-		} else {
-			parts = append(parts, styleDim.Render(" "+c.key+" "+c.label+" "))
+			parts = append(parts, st.Render(" "+c.disp+" "))
+			continue
 		}
+		if idx := strings.Index(c.disp, "]"); idx > 0 {
+			keyPart := lipgloss.NewStyle().Bold(true).Foreground(accent).Render(c.disp[:idx+1])
+			parts = append(parts, keyPart+styleDim.Render(c.disp[idx+1:]))
+			continue
+		}
+		parts = append(parts, styleDim.Render(" "+c.disp+" "))
 	}
-	return strings.Join(parts, " ")
+	return strings.Join(parts, "  ")
 }
 
 // ───────────────────────── 摇晃动画节拍 ─────────────────────────
@@ -117,6 +123,9 @@ func banner(info *targetInfo) string {
 
 // plainMode 由设置向导写入:终端无法显示特殊符号时,图标/光标/徽章退化为纯文本。
 var plainMode bool
+
+// noAnim 由设置写入:关闭流光/摇晃/转轮等动画。
+var noAnim bool
 
 // cursorGlyph 列表光标符号。
 func cursorGlyph() string {
@@ -157,9 +166,6 @@ type baseModel struct {
 
 // quitArmDelay 第二次 Q 需距首次至少 0.5s 才生效(防误触连按)。
 const quitArmDelay = 500 * time.Millisecond
-
-// autoRelaunch 替换完成后自动打开/重启对应软件(向导偏好,默认开启)。
-var autoRelaunch = true
 
 // armSwitch 进入"再按一次 Enter 确认切换"状态(提示显示在选中行徽章位置)。
 func (b *baseModel) armSwitch(name string) {
@@ -260,7 +266,9 @@ func (b *baseModel) handleStatusTick() tea.Cmd {
 		return nil
 	}
 	if b.deleteArm || b.mode == modeConfirm {
-		b.shakeFrame++
+		if !noAnim {
+			b.shakeFrame++
+		}
 		return statusTick()
 	}
 	return nil
@@ -285,11 +293,20 @@ func (b baseModel) renderStatus() string {
 // bottomBar 底部操作栏与提示行(附仓库地址)。
 func (b baseModel) bottomBar(info *targetInfo, chips []chip) string {
 	bar := chipBar(chips, b.chipIdx, info.accent)
-	hint := styleDim.Render("↑/↓ 选条目 · ←/→ 选操作 · 回车执行选中操作 · Esc 返回选择 · q/Q 退出 · " + meta.Repo)
+	hint := styleDim.Render("↑/↓ 选条目 · ←/→ 选操作 · 回车执行选中操作 · Esc 返回选择 · " + meta.Repo)
 	return bar + "\n" + hint
 }
 
-// confirmBox 确认框:警示文案 + 摇晃的按键行。
+// centerBox 将盒状面板按终端宽度水平居中。
+func (b baseModel) centerBox(box string) string {
+	w := b.width
+	if w <= 0 {
+		w = 80
+	}
+	return lipgloss.PlaceHorizontal(w, lipgloss.Center, box)
+}
+
+// confirmBox 确认框:警示文案 + 摇晃的按键行(水平居中)。
 func (b baseModel) confirmBox(text, keys string) string {
-	return "\n" + styleBox.Render(styleWarn.Render(text)+"\n"+shakePrefix(b.shakeFrame)+keys) + "\n"
+	return "\n" + b.centerBox(styleBox.Render(styleWarn.Render(text)+"\n"+shakePrefix(b.shakeFrame)+keys)) + "\n"
 }
