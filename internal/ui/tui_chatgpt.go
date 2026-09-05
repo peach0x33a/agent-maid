@@ -146,6 +146,7 @@ type cRefreshMsg struct{}
 func (m ChatgptModel) Update(msg tea.Msg) (Manager, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		m.width = msg.Width
 		return m, nil
 	case cRefreshMsg:
 		return m, m.refresh
@@ -651,11 +652,11 @@ func (m ChatgptModel) View() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(banner(&cinfo))
+	b.WriteString(m.header(&cinfo))
 	b.WriteString("\n")
 	b.WriteString(m.currentLine())
 	b.WriteString("\n")
-	b.WriteString(styleHeader.Render(fmt.Sprintf(" 账号库(共 %d 个) · %s", len(m.accounts), gptstore.DefaultPath())))
+	b.WriteString(m.section(fmt.Sprintf("账号库(共 %d 个) · %s", len(m.accounts), gptstore.DefaultPath())))
 	b.WriteString("\n")
 
 	if len(m.accounts) == 0 {

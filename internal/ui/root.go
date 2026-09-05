@@ -60,11 +60,15 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.screen = screenSelect
 		return m, m.sel.Init()
 	case tea.WindowSizeMsg:
+		// 广播给全部注册实例:未进入的管理器也要保持宽度等状态新鲜
+		for i, mgr := range m.registry {
+			m.registry[i], _ = mgr.Update(msg)
+		}
+		if m.cur != nil {
+			m.cur, _ = m.cur.Update(msg) // cur 可能是注册表之外的旧副本
+		}
 		var cmd tea.Cmd
 		m.sel, cmd = m.sel.Update(msg)
-		if m.cur != nil {
-			_, _ = m.cur.Update(msg)
-		}
 		return m, cmd
 	}
 

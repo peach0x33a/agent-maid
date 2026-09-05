@@ -194,6 +194,7 @@ type zRefreshMsg struct{}
 func (m ZcodeModel) Update(msg tea.Msg) (Manager, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		m.width = msg.Width
 		return m, nil
 	case zRefreshMsg:
 		return m, m.refresh
@@ -550,7 +551,7 @@ func (m ZcodeModel) View() string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(banner(&zinfo))
+	b.WriteString(m.header(&zinfo))
 	b.WriteString("\n")
 	b.WriteString(m.currentLine())
 	b.WriteString("\n")
@@ -558,7 +559,7 @@ func (m ZcodeModel) View() string {
 		b.WriteString(styleWarn.Render("⚠ ZCode 正在运行:切换将默认等待其完全退出后执行,确认时也可选择无视风险立即替换"))
 		b.WriteString("\n")
 	}
-	b.WriteString(styleHeader.Render(fmt.Sprintf(" 槽位(共 %d 个)", len(m.slots))))
+	b.WriteString(m.section(fmt.Sprintf("槽位(共 %d 个)", len(m.slots))))
 	b.WriteString("\n")
 
 	if len(m.slots) == 0 {

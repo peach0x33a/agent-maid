@@ -9,15 +9,13 @@ import (
 var (
 	styleTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).
 			MarginBottom(1)
-	styleDim    = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	styleOk     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	styleErr    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	styleWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	styleSel    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
-	styleHelp   = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).MarginTop(1)
-	styleBox    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(1, 2)
-	styleHeader = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).
-			Border(lipgloss.NormalBorder(), false, false, true, false).MarginBottom(0)
+	styleDim  = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	styleOk   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	styleErr  = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	styleWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	styleSel  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	styleHelp = lipgloss.NewStyle().Foreground(lipgloss.Color("241")).MarginTop(1)
+	styleBox  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(1, 2)
 )
 
 // backMsg 从目标管理器返回首屏选择。

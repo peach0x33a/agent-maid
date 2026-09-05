@@ -100,16 +100,17 @@ func shakePrefix(frame int) string {
 	return strings.Repeat(" ", shakeOffsets[frame%len(shakeOffsets)])
 }
 
-// banner 子界面顶部持续显示的标题行。
+// banner 子界面顶部持续显示的标题行(分隔线见 header)。
 func banner(info *targetInfo) string {
-	return styleHeader.Render(lipgloss.NewStyle().Bold(true).
-		Render("AgentMaid - " + info.Name + "账号管理"))
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("252")).
+		Render("AgentMaid - " + info.Name + "账号管理")
 }
 
 // ───────────────────────── 共享模型状态 ─────────────────────────
 
 // baseModel 各工具界面共享的交互状态与提示生命周期。
 type baseModel struct {
+	width      int // 终端宽度(WindowSizeMsg 时写入,用于全宽分隔线)
 	mode       mode
 	status     status
 	chipIdx    int       // 操作栏选中项
@@ -117,6 +118,26 @@ type baseModel struct {
 	deleteArm  bool      // 已按过一次 d,等待再次确认
 	deleteName string    // 待删除项的标识(槽位名/账号 ID)
 	deleteAt   time.Time // 进入待确认的时刻(超时自动撤下)
+}
+
+// header 顶部横幅 + 全宽分隔线(横幅的线稍亮)。
+func (b baseModel) header(info *targetInfo) string {
+	return banner(info) + "\n" + b.rule("240")
+}
+
+// section 小节标题 + 全宽分隔线(比横幅的更淡一档)。
+func (b baseModel) section(text string) string {
+	return styleDim.Render(text) + "\n" + b.rule("238")
+}
+
+// rule 渲染铺满终端宽度的水平分隔线。
+func (b baseModel) rule(color string) string {
+	w := b.width
+	if w <= 0 {
+		w = 80
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).
+		Render(strings.Repeat("─", w))
 }
 
 func (b *baseModel) setStatus(err error, okText, errPrefix string) {
