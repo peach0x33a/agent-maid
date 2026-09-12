@@ -80,7 +80,7 @@ func joinTable(rows [][]string) string {
 			}
 			parts = append(parts, lipgloss.NewStyle().Width(widths[i]).Render(cell))
 		}
-		out = append(out, strings.TrimSpace(strings.Join(parts, "  ")))
+		out = append(out, strings.TrimRight(strings.Join(parts, "  "), " "))
 	}
 	return strings.Join(out, "\n")
 }

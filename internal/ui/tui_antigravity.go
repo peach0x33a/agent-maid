@@ -432,7 +432,7 @@ func (m AntigravityModel) currentLine() string {
 
 // slotTable 渲染槽位列表表格(表头 + 动态列宽)。
 func (m AntigravityModel) slotTable() string {
-	rows := [][]string{{"", "槽位", "邮箱", "最后使用", "状态"}}
+	rows := [][]string{{"  槽位", "邮箱", "最后使用", "状态"}}
 	for i, slot := range m.slots {
 		inUse := m.current.Exists && antigravity.EqualCreds(m.current.Creds, slot.OAuthCreds)
 
@@ -440,7 +440,7 @@ func (m AntigravityModel) slotTable() string {
 		nameStyle := stylePlainName
 		switch {
 		case i == m.cursor:
-			cursor = styleSel.Render("❯ ")
+			cursor = styleSel.Bold(true).Render("> ")
 			nameStyle = styleSel
 		case inUse:
 			nameStyle = styleInUseName
@@ -462,6 +462,9 @@ func (m AntigravityModel) slotTable() string {
 			shortTime(slot.LastUsedAt),
 			mark,
 		})
+	}
+	for i, cell := range rows[0] {
+		rows[0][i] = styleDim.Render(cell)
 	}
 	return joinTable(rows)
 }

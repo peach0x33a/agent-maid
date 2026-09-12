@@ -683,7 +683,7 @@ func (m ChatgptModel) currentLine() string {
 
 // accountTable 渲染账号列表表格(表头 + 动态列宽)。
 func (m ChatgptModel) accountTable() string {
-	rows := [][]string{{"", "账号", "套餐", "来源", "ID", "最后使用", "状态"}}
+	rows := [][]string{{"  账号", "套餐", "来源", "ID", "最后使用", "状态"}}
 	for i, a := range m.accounts {
 		inUse := m.current != nil && a.AccountID != "" && a.AccountID == m.current.AccountID
 
@@ -691,7 +691,7 @@ func (m ChatgptModel) accountTable() string {
 		nameStyle := stylePlainName
 		switch {
 		case i == m.cursor:
-			cursor = styleSel.Render("❯ ")
+			cursor = styleSel.Bold(true).Render("> ")
 			nameStyle = styleSel
 		case inUse:
 			nameStyle = styleInUseName
@@ -721,6 +721,10 @@ func (m ChatgptModel) accountTable() string {
 			shortTime(a.LastUsedAt),
 			mark,
 		})
+	}
+	// 表头置灰
+	for i, cell := range rows[0] {
+		rows[0][i] = styleDim.Render(cell)
 	}
 	return joinTable(rows)
 }

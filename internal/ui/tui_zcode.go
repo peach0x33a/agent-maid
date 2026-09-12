@@ -571,7 +571,7 @@ func (m ZcodeModel) currentLine() string {
 
 // slotTable 渲染槽位列表表格(表头 + 动态列宽)。
 func (m ZcodeModel) slotTable() string {
-	rows := [][]string{{"", "槽位", "账号", "最后使用", "状态"}}
+	rows := [][]string{{"  槽位", "账号", "最后使用", "状态"}}
 	for i, slot := range m.slots {
 		inUse := m.current.Exists && zcode.EqualCredentials(m.current.Creds, slot.Credentials)
 
@@ -579,7 +579,7 @@ func (m ZcodeModel) slotTable() string {
 		nameStyle := stylePlainName
 		switch {
 		case i == m.cursor:
-			cursor = styleSel.Render("❯ ")
+			cursor = styleSel.Bold(true).Render("> ")
 			nameStyle = styleSel
 		case inUse:
 			nameStyle = styleInUseName
@@ -604,6 +604,9 @@ func (m ZcodeModel) slotTable() string {
 			shortTime(slot.LastUsedAt),
 			mark,
 		})
+	}
+	for i, cell := range rows[0] {
+		rows[0][i] = styleDim.Render(cell)
 	}
 	return joinTable(rows)
 }
