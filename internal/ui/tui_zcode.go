@@ -608,29 +608,35 @@ func (m ZcodeModel) View() string {
 	if m.quit {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString(m.header(&zinfo))
-	b.WriteString("\n")
-	b.WriteString(m.currentLine())
-	b.WriteString("\n")
-	if m.zcodeRun {
-		b.WriteString(styleWarn.Render("⚠ ZCode 正在运行:切换将默认等待其完全退出后执行,确认时也可选择无视风险立即替换"))
-		b.WriteString("\n")
+	w := m.width
+	if w <= 0 {
+		w = 80
 	}
-	b.WriteString(m.section(fmt.Sprintf("槽位(共 %d 个)", len(m.slots))))
-	b.WriteString("\n")
 
+	// 列表先行,正文块宽度按内容计算,整体在终端内水平居中
+	var rowLines []string
 	if len(m.slots) == 0 {
-		b.WriteString(styleDim.Render("  (空)按 s 保存当前账号,或 S 快速保存\n"))
+		rowLines = append(rowLines, styleDim.Render("(空)按 s 保存当前账号,或 S 快速保存"))
 	} else {
 		for i := range m.slots {
-			b.WriteString(m.slotRow(i))
-			b.WriteString("\n")
+			rowLines = append(rowLines, m.slotRow(i))
 		}
 	}
-	b.WriteString("\n")
-	b.WriteString(m.renderStatus())
-	b.WriteString("\n")
+	rowsBlock := strings.Join(rowLines, "\n")
+	bodyW := max(lipgloss.Width(rowsBlock), 46)
+	if bodyW > w-2 {
+		bodyW = w - 2
+	}
+
+	var body strings.Builder
+	body.WriteString(m.currentLine() + "\n")
+	if m.zcodeRun {
+		body.WriteString(styleWarn.Render("⚠ ZCode 正在运行:切换将默认等待其完全退出后执行,确认时也可选择无视风险立即替换") + "\n")
+	}
+	body.WriteString(styleDim.Render(fmt.Sprintf("槽位(共 %d 个)", len(m.slots))) + "\n")
+	body.WriteString(ruleW(bodyW, "238") + "\n")
+	body.WriteString(rowsBlock + "\n\n")
+	body.WriteString(m.renderStatus() + "\n")
 
 	switch m.mode {
 	case modeInput:
@@ -638,16 +644,15 @@ func (m ZcodeModel) View() string {
 		if m.inputFor == inputRename {
 			purpose = "重命名槽位 " + m.renameFrom
 		}
-		b.WriteString("\n" + m.centerBox(styleBox.Render(purpose+"\n"+m.input.View())) + "\n")
+		body.WriteString("\n" + styleBox.Render(purpose+"\n"+m.input.View()) + "\n")
 	case modeConfirm:
-		var text string
-		var keys string
+		var text, keys string
 		switch m.confirm {
 		case zconfirmOverwriteSave:
 			text = fmt.Sprintf("槽位 %q 已存在,覆盖?", m.confirmTx)
 			keys = "[y] 确认  [n] 取消"
 		}
-		b.WriteString(m.confirmBox(text, keys))
+		body.WriteString(m.confirmBox(text, keys))
 	case modeWaiting:
 		elapsed := time.Since(m.waitStart).Truncate(time.Second)
 		spin := styleSel.Render(spinFrames()[m.spin%len(spinFrames())])
@@ -668,16 +673,17 @@ func (m ZcodeModel) View() string {
 			lines = append(lines, styleDim.Render("  (检测中…)"))
 		}
 		lines = append(lines, "", styleWarn.Render("[f] 立即替换(无视风险)")+"  [c] 关闭工具,后台继续等待并切换  [n] 取消等待  [q] 退出")
-		b.WriteString("\n" + m.centerBox(styleBox.Render(strings.Join(lines, "\n"))) + "\n")
+		body.WriteString("\n" + styleBox.Render(strings.Join(lines, "\n")) + "\n")
 	case modeHelp:
-		b.WriteString("\n" + m.centerBox(styleBox.Render(zHelpView())) + "\n")
+		body.WriteString("\n" + styleBox.Render(zHelpView()) + "\n")
 	case modeMachine:
-		b.WriteString("\n" + m.centerBox(styleBox.Render(zMachineView())) + "\n")
+		body.WriteString("\n" + styleBox.Render(zMachineView()) + "\n")
 	}
 
-	// 底部操作栏:左右键选中、回车执行,或直接按对应键
-	b.WriteString("\n" + m.bottomBar(&zinfo, zChips))
-	return b.String()
+	footer := m.bottomBar(&zinfo, zChips)
+	return m.header(&zinfo) + "\n" +
+		lipgloss.PlaceHorizontal(w, lipgloss.Center, body.String()) + "\n" +
+		lipgloss.PlaceHorizontal(w, lipgloss.Center, footer)
 }
 
 func zMachineView() string {

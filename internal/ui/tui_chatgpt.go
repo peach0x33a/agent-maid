@@ -730,34 +730,34 @@ func (m ChatgptModel) View() string {
 	if m.quit {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString(m.header(&cinfo))
-	b.WriteString("\n")
-	b.WriteString(m.currentLine())
-	b.WriteString("\n")
-	if m.codexRun {
-		b.WriteString(styleWarn.Render("⚠ Codex 正在运行:切换后建议尽快重启 Codex,避免运行中的凭据回写覆盖"))
-		b.WriteString("\n")
+	w := m.width
+	if w <= 0 {
+		w = 80
 	}
-	b.WriteString(m.section(fmt.Sprintf("账号库(共 %d 个) · %s", len(m.accounts), gptstore.DefaultPath())))
-	b.WriteString("\n")
 
+	var rowLines []string
 	if len(m.accounts) == 0 {
-		b.WriteString(styleDim.Render("  (空)按 i 导入 WebSession / sub2api 导出的 JSON,或 s 保存当前登录凭据\n"))
+		rowLines = append(rowLines, styleDim.Render("(空)按 i 导入 WebSession / sub2api 导出的 JSON,或 s 保存当前登录凭据"))
 	} else {
 		for i := range m.accounts {
-			b.WriteString(m.accountRow(i))
-			b.WriteString("\n")
+			rowLines = append(rowLines, m.accountRow(i))
 		}
 	}
-	b.WriteString("\n")
-	if m.status.kind == 4 {
-		// 红色确认提示:左右摇晃
-		b.WriteString(status{4, shakePrefix(m.shakeFrame) + m.status.text}.render())
-	} else {
-		b.WriteString(m.renderStatus())
+	rowsBlock := strings.Join(rowLines, "\n")
+	bodyW := max(lipgloss.Width(rowsBlock), 56)
+	if bodyW > w-2 {
+		bodyW = w - 2
 	}
-	b.WriteString("\n")
+
+	var body strings.Builder
+	body.WriteString(m.currentLine() + "\n")
+	if m.codexRun {
+		body.WriteString(styleWarn.Render("⚠ Codex 正在运行:切换后建议尽快重启 Codex,避免运行中的凭据回写覆盖") + "\n")
+	}
+	body.WriteString(styleDim.Render(fmt.Sprintf("账号库(共 %d 个)", len(m.accounts))) + "\n")
+	body.WriteString(ruleW(bodyW, "238") + "\n")
+	body.WriteString(rowsBlock + "\n\n")
+	body.WriteString(m.renderStatus() + "\n")
 
 	switch m.mode {
 	case modeInput:
@@ -767,20 +767,21 @@ func (m ChatgptModel) View() string {
 		} else if m.inputFor == inputGRename {
 			purpose = "重命名账号"
 		}
-		b.WriteString("\n" + m.centerBox(styleBox.Render(purpose+"\n"+m.input.View())) + "\n")
+		body.WriteString("\n" + styleBox.Render(purpose+"\n"+m.input.View()) + "\n")
 	case modeDetail:
 		if sel := m.selected(); sel != nil {
-			b.WriteString("\n" + m.centerBox(styleBox.Render(m.detailView(sel))) + "\n")
+			body.WriteString("\n" + styleBox.Render(m.detailView(sel)) + "\n")
 		}
 	case modeHelp:
-		b.WriteString("\n" + m.centerBox(styleBox.Render(cHelpView())) + "\n")
+		body.WriteString("\n" + styleBox.Render(cHelpView()) + "\n")
 	case modeMachine:
-		b.WriteString("\n" + m.centerBox(styleBox.Render(m.infoView())) + "\n")
+		body.WriteString("\n" + styleBox.Render(m.infoView()) + "\n")
 	}
 
-	// 底部操作栏:左右键选中、回车执行,或直接按对应键
-	b.WriteString("\n" + m.bottomBar(&cinfo, cChips))
-	return b.String()
+	footer := m.bottomBar(&cinfo, cChips)
+	return m.header(&cinfo) + "\n" +
+		lipgloss.PlaceHorizontal(w, lipgloss.Center, body.String()) + "\n" +
+		lipgloss.PlaceHorizontal(w, lipgloss.Center, footer)
 }
 
 func (m ChatgptModel) findByID(id string) *gptstore.Account {

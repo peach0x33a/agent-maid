@@ -214,12 +214,18 @@ func (b baseModel) section(text string) string {
 	return styleDim.Render(text) + "\n" + b.rule("238")
 }
 
-// rule 渲染铺满终端宽度的水平分隔线。
+// rule 渲染铺满终端宽度的水平分隔线(横幅用)。
 func (b baseModel) rule(color string) string {
-	w := b.width
-	if w <= 0 {
-		w = 80
-	}
+	return ruleW(func() int {
+		if b.width > 0 {
+			return b.width
+		}
+		return 80
+	}(), color)
+}
+
+// ruleW 渲染指定宽度的水平分隔线(正文块内使用)。
+func ruleW(w int, color string) string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).
 		Render(strings.Repeat("─", w))
 }
@@ -306,7 +312,8 @@ func (b baseModel) centerBox(box string) string {
 	return lipgloss.PlaceHorizontal(w, lipgloss.Center, box)
 }
 
-// confirmBox 确认框:警示文案 + 摇晃的按键行(水平居中)。
+// confirmBox 确认框:警示文案 + 摇晃的按键行。
+// (所在正文块已整体居中,此处不再二次偏移)
 func (b baseModel) confirmBox(text, keys string) string {
-	return "\n" + b.centerBox(styleBox.Render(styleWarn.Render(text)+"\n"+shakePrefix(b.shakeFrame)+keys)) + "\n"
+	return "\n" + styleBox.Render(styleWarn.Render(text)+"\n"+shakePrefix(b.shakeFrame)+keys) + "\n"
 }

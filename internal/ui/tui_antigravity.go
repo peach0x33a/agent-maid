@@ -465,29 +465,34 @@ func (m AntigravityModel) View() string {
 	if m.quit {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString(m.header(&ainfo))
-	b.WriteString("\n")
-	b.WriteString(m.currentLine())
-	b.WriteString("\n")
-	if m.agRun {
-		b.WriteString(styleWarn.Render("⚠ Antigravity 正在运行:切换后建议尽快重启 Antigravity,避免运行中的凭据回写覆盖"))
-		b.WriteString("\n")
+	w := m.width
+	if w <= 0 {
+		w = 80
 	}
-	b.WriteString(m.section(fmt.Sprintf("槽位(共 %d 个)", len(m.slots))))
-	b.WriteString("\n")
 
+	var rowLines []string
 	if len(m.slots) == 0 {
-		b.WriteString(styleDim.Render("  (空)按 s 保存当前 Google 账号,或 S 快速保存\n"))
+		rowLines = append(rowLines, styleDim.Render("(空)按 s 保存当前 Google 账号,或 S 快速保存"))
 	} else {
 		for i := range m.slots {
-			b.WriteString(m.slotRow(i))
-			b.WriteString("\n")
+			rowLines = append(rowLines, m.slotRow(i))
 		}
 	}
-	b.WriteString("\n")
-	b.WriteString(m.renderStatus())
-	b.WriteString("\n")
+	rowsBlock := strings.Join(rowLines, "\n")
+	bodyW := max(lipgloss.Width(rowsBlock), 46)
+	if bodyW > w-2 {
+		bodyW = w - 2
+	}
+
+	var body strings.Builder
+	body.WriteString(m.currentLine() + "\n")
+	if m.agRun {
+		body.WriteString(styleWarn.Render("⚠ Antigravity 正在运行:切换后建议尽快重启 Antigravity,避免运行中的凭据回写覆盖") + "\n")
+	}
+	body.WriteString(styleDim.Render(fmt.Sprintf("槽位(共 %d 个)", len(m.slots))) + "\n")
+	body.WriteString(ruleW(bodyW, "238") + "\n")
+	body.WriteString(rowsBlock + "\n\n")
+	body.WriteString(m.renderStatus() + "\n")
 
 	switch m.mode {
 	case modeInput:
@@ -495,7 +500,7 @@ func (m AntigravityModel) View() string {
 		if m.inputFor == inputRename {
 			purpose = "重命名槽位 " + m.renameFrom
 		}
-		b.WriteString("\n" + m.centerBox(styleBox.Render(purpose+"\n"+m.input.View())) + "\n")
+		body.WriteString("\n" + styleBox.Render(purpose+"\n"+m.input.View()) + "\n")
 	case modeConfirm:
 		var text, keys string
 		switch m.confirm {
@@ -503,15 +508,17 @@ func (m AntigravityModel) View() string {
 			text = fmt.Sprintf("槽位 %q 已存在,覆盖?", m.confirmTx)
 			keys = "[y] 确认  [n] 取消"
 		}
-		b.WriteString(m.confirmBox(text, keys))
+		body.WriteString(m.confirmBox(text, keys))
 	case modeHelp:
-		b.WriteString("\n" + m.centerBox(styleBox.Render(aHelpView())) + "\n")
+		body.WriteString("\n" + styleBox.Render(aHelpView()) + "\n")
 	case modeMachine:
-		b.WriteString("\n" + m.centerBox(styleBox.Render(aInfoView(m))) + "\n")
+		body.WriteString("\n" + styleBox.Render(aInfoView(m)) + "\n")
 	}
 
-	b.WriteString("\n" + m.bottomBar(&ainfo, aChips))
-	return b.String()
+	footer := m.bottomBar(&ainfo, aChips)
+	return m.header(&ainfo) + "\n" +
+		lipgloss.PlaceHorizontal(w, lipgloss.Center, body.String()) + "\n" +
+		lipgloss.PlaceHorizontal(w, lipgloss.Center, footer)
 }
 
 func aInfoView(m AntigravityModel) string {
