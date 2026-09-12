@@ -97,23 +97,28 @@ func (m SelectModel) View() string {
 		h = 24
 	}
 
-	// 轮播布局:选中项恒居中(大图),两侧是上一项/下一项(小图,缩小 20%,
-	// 置灰),列表无限循环;窄终端放不下时只显示选中项。
-	const boxChrome = 8
-	n := len(m.infos)
-	center := m.slot(m.cursor, false, false, m.phase)
+	// 纯文本模式:垂直居中菜单(无图标,一行一个工具,三列对齐)
 	var inner string
-	if n >= 2 {
-		left := m.slot((m.cursor+n-1)%n, true, true, 0)
-		right := m.slot((m.cursor+1)%n, true, true, 0)
-		row := joinHorizontal([]string{left, center, right}, "     ")
-		if totalWidth([]string{left, center, right}) <= w-boxChrome {
-			inner = row
+	if plainMode {
+		inner = m.plainMenu()
+	} else {
+		// 轮播布局:选中项恒居中(大图),两侧是上一项/下一项(小图,缩小 20%,
+		// 置灰),列表无限循环;窄终端放不下时只显示选中项。
+		const boxChrome = 8
+		n := len(m.infos)
+		center := m.slot(m.cursor, false, false, m.phase)
+		if n >= 2 {
+			left := m.slot((m.cursor+n-1)%n, true, true, 0)
+			right := m.slot((m.cursor+1)%n, true, true, 0)
+			row := joinHorizontal([]string{left, center, right}, "     ")
+			if totalWidth([]string{left, center, right}) <= w-boxChrome {
+				inner = row
+			} else {
+				inner = center
+			}
 		} else {
 			inner = center
 		}
-	} else {
-		inner = center
 	}
 
 	// 外框:至少容纳内容+内边距(绝不会被折行);宽终端舒展,上限 108
@@ -125,13 +130,15 @@ func (m SelectModel) View() string {
 	if stretch := w - 6; stretch > boxW {
 		boxW = max(boxW, min(stretch, 108))
 	}
-	box := lipgloss.NewStyle().
+	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("240")).
 		Padding(1, 3).
-		Width(boxW).
-		Align(lipgloss.Center).
-		Render(inner)
+		Width(boxW)
+	if !plainMode {
+		boxStyle = boxStyle.Align(lipgloss.Center) // 纯文本菜单各行宽度不同,逐行居中会错位
+	}
+	box := boxStyle.Render(inner)
 
 	hint := "←/→ 或 Tab 选择"
 	if n := len(m.infos); n > 1 {
@@ -157,6 +164,36 @@ func (m SelectModel) View() string {
 		styleDim.Render(meta.Name+" v"+meta.Version+" · "+meta.Repo),
 	)
 	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, block)
+}
+
+// plainMenu 纯文本模式的首屏菜单:一行一个工具,名字/说明/路径三列对齐,
+// 整块由外层居中。
+func (m SelectModel) plainMenu() string {
+	nameW, descW := 0, 0
+	for _, info := range m.infos {
+		if w := lipgloss.Width(info.Name); w > nameW {
+			nameW = w
+		}
+		if w := lipgloss.Width(info.Desc); w > descW {
+			descW = w
+		}
+	}
+	var lines []string
+	for i := range m.infos {
+		info := m.infos[i]
+		sel := i == m.cursor
+		cursor := "  "
+		nameStyle := stylePlainName
+		if sel {
+			cursor = styleSel.Bold(true).Render("> ")
+			nameStyle = styleSel
+		}
+		lines = append(lines,
+			cursor+nameStyle.Render(lipgloss.NewStyle().Width(nameW).Render(info.Name))+"  "+
+				styleDim.Render(lipgloss.NewStyle().Width(descW).Render(info.Desc))+"  "+
+				styleDim.Render(info.Path))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // slot 渲染单个工具栏位。dim=true 为两侧项:置灰、小图、仅显示名称;
