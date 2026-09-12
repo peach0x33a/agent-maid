@@ -595,21 +595,36 @@ func (m ChatgptModel) currentLine() string {
 	if m.current == nil {
 		return styleWarn.Render("当前凭据:auth.json 不存在(官方端尚未登录)")
 	}
-	line := "当前凭据:" + prettyAuthMode(m.current.AuthMode)
-	if m.current.Email != "" {
-		line += " | " + m.current.Email
-	} else if m.current.AccountID != "" {
-		line += " | " + shortID(m.current.AccountID)
-	} else if m.current.AuthMode == "apikey" {
-		line += "(API Key 认证,无 ChatGPT token)"
-	}
+
+	mode := prettyAuthMode(m.current.AuthMode)
+	email := orDash(m.current.Email)
+	id := orDash(m.current.AccountID)
+	refresh := "—"
 	if m.current.LastRefresh != "" {
-		line += styleDim.Render(" | 最近刷新 " + refreshText(m.current.LastRefresh))
+		refresh = refreshText(m.current.LastRefresh)
 	}
-	return line
+
+	var b strings.Builder
+	b.WriteString("当前凭据:" + prettyColored(m.current.AuthMode != "", mode) + " | " + email + "\n")
+	if m.current.AccountID != "" {
+		b.WriteString("账号 ID:" + id + "\n")
+	}
+	b.WriteString("最近刷新:" + styleDim.Render(refresh))
+	return b.String()
 }
 
-// accountTable 渲染账号列表表格(表头 + 动态列宽)。
+// prettyColored 条件高亮:ok 为真时用强调色渲染文本。
+func prettyColored(ok bool, s string) string {
+	if ok {
+		return accentStyle.Render(s)
+	}
+	return s
+}
+
+// accentStyle 平台强调色(取当前工具的 accent)。
+var accentStyle = lipgloss.NewStyle().Foreground(cinfo.accent)
+
+// accountTable 渲染账号列表表格(表头 + 动态列宽)。// accountTable 渲染账号列表表格(表头 + 动态列宽)。
 func (m ChatgptModel) accountTable() string {
 	rows := [][]string{{"  账号", "套餐", "来源", "ID", "最后使用", "状态"}}
 	for i, a := range m.accounts {
@@ -825,20 +840,23 @@ func (m ChatgptModel) infoView() string {
 	if m.home != "" {
 		authPath = gptauth.AuthFilePath(m.home)
 	}
-	current := styleDim.Render("(未登录)")
-	if m.current != nil {
-		cur := accentSt.Render(prettyAuthMode(m.current.AuthMode))
+	var current string
+	var curRows []string
+	if m.current == nil {
+		curRows = append(curRows, styleDim.Render("(未登录)"))
+	} else {
+		curRows = append(curRows, accentSt.Render(prettyAuthMode(m.current.AuthMode)))
 		if m.current.Email != "" {
-			cur += " | " + val.Render(m.current.Email)
+			curRows = append(curRows, val.Render(m.current.Email))
 		}
 		if m.current.AccountID != "" {
-			cur += " | " + styleDim.Render(m.current.AccountID)
+			curRows = append(curRows, styleDim.Render(m.current.AccountID))
 		}
 		if m.current.LastRefresh != "" {
-			cur += styleDim.Render(" | 最近刷新 " + refreshText(m.current.LastRefresh))
+			curRows = append(curRows, styleDim.Render("最近刷新 "+refreshText(m.current.LastRefresh)))
 		}
-		current = cur
 	}
+	current = strings.Join(curRows, "\n")
 	codexHome := os.Getenv("CODEX_HOME")
 	if codexHome == "" {
 		codexHome = "~/.codex"
@@ -847,11 +865,16 @@ func (m ChatgptModel) infoView() string {
 	if gptauth.CodexRunning() {
 		codexState = accentSt.Render("正在运行")
 	}
+	curLines := strings.Split(current, "\n")
+	curBlock := styleDim.Render("当前凭据:  ") + curLines[0]
+	for _, extra := range curLines[1:] {
+		curBlock += "\n" + strings.Repeat(" ", 11) + extra
+	}
 	return strings.Join([]string{
 		styleTitle.Render("信息"),
 		styleDim.Render("官方目录:  ") + val.Render(orDash(m.home)),
 		styleDim.Render("auth.json: ") + val.Render(orDash(authPath)),
-		styleDim.Render("当前凭据:  ") + current,
+		curBlock,
 		styleDim.Render("账号库:    ") + val.Render(gptstore.DefaultPath()) +
 			accentSt.Render(fmt.Sprintf("  %d 个账号", len(m.accounts))),
 		styleDim.Render("Codex:     ") + codexState,
