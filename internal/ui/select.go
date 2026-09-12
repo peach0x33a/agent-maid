@@ -146,7 +146,7 @@ func (m SelectModel) View() string {
 		for i := 1; i <= n; i++ {
 			digits = append(digits, fmt.Sprintf("%d", i))
 		}
-		hint += " · " + strings.Join(digits, "/") + " 直接选"
+		hint += " | " + strings.Join(digits, "/") + " 直接选"
 	}
 	hint += " · Enter 进入 · S 设置"
 
@@ -161,7 +161,7 @@ func (m SelectModel) View() string {
 		box,
 		"",
 		styleHelp.Render(hint),
-		styleDim.Render(meta.Name+" v"+meta.Version+" · "+meta.Repo),
+		styleDim.Render(meta.Name+" v"+meta.Version+" | "+meta.Repo),
 	)
 	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, block)
 }

@@ -154,6 +154,7 @@ func (m ChatgptModel) Update(msg tea.Msg) (Manager, tea.Cmd) {
 		return m, cmd
 	}
 
+	// 页面主体
 	switch m.mode {
 	case modeInput:
 		return m.updateInput(msg)
@@ -202,7 +203,6 @@ func (m ChatgptModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
 		m.clearPrompt()
 		m.cursor = len(m.accounts) - 1
 	case "enter":
-		// 回车执行操作栏当前选中项;默认第 0 项即"切换"
 		return m.dispatch(cChips[m.chipIdx].key)
 	default:
 		return m.dispatch(key.String())
@@ -210,7 +210,7 @@ func (m ChatgptModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
 	return m, nil
 }
 
-// dispatch 统一的动作分发:字母键与操作栏回车共用。
+// dispatch 统一的动作分发:字母键与操作栏回车共用(字母大小写不区分)。
 func (m ChatgptModel) dispatch(key string) (Manager, tea.Cmd) {
 	switch key {
 	case "i", "I": // 导入 JSON
@@ -368,7 +368,7 @@ func (m ChatgptModel) updateInput(msg tea.Msg) (Manager, tea.Cmd) {
 }
 
 // saveCurrent 把官方 auth.json 里当前生效的凭据存入账号库。
-// label 为空时用 email / account_id 自动命名(即"快存")。
+// label 为空时用 email / account_id 自动命名。
 func (m *ChatgptModel) saveCurrent(label string) (string, error) {
 	home, err := gptauth.ResolveHome("")
 	if err != nil {
@@ -380,7 +380,7 @@ func (m *ChatgptModel) saveCurrent(label string) (string, error) {
 	}
 	if !found {
 		if authMode != "" && authMode != gptauth.AuthModeChatGPT {
-			return "", fmt.Errorf("当前是 %s 认证,没有可保存的 ChatGPT 凭据", authMode)
+			return "", fmt.Errorf("当前是 %s 认证,没有可保存的 ChatGPT 凭据", prettyAuthMode(authMode))
 		}
 		return "", fmt.Errorf("官方目录没有可保存的凭据(%s)", gptauth.AuthFilePath(home))
 	}
@@ -485,7 +485,11 @@ func (m *ChatgptModel) importAccounts(raw string) status {
 		records = append(records, gptsession.Collect(doc, name)...)
 	}
 	if len(records) == 0 {
-		return status{2, "未在输入中找到包含 access_token 的会话/账号对象(支持 WebSession 与 sub2api 导出)"}
+		msg := "未在输入中找到包含 access_token 的会话/账号对象(支持 WebSession 与 sub2api 导出)"
+		if badDocs > 0 {
+			msg += fmt.Sprintf("(另有 %d 个无效文档)", badDocs)
+		}
+		return status{2, msg}
 	}
 	st, err := gptstore.Load(gptstore.DefaultPath())
 	if err != nil {
@@ -531,7 +535,7 @@ func (m *ChatgptModel) importAccounts(raw string) status {
 	return status{1, fmt.Sprintf("已导入 %d 个账号%s,选中后按 Enter 激活", imported, tail)}
 }
 
-// doActivate 把账号投影为官方 auth.json(保序合并、备份、原子写入)。
+// doActivate 把账号投影为官方 auth.json(保序合并、原子写入)。
 func (m *ChatgptModel) doActivate(id string) (string, error) {
 	st, err := gptstore.Load(gptstore.DefaultPath())
 	if err != nil {
@@ -565,12 +569,10 @@ func (m *ChatgptModel) doActivate(id string) (string, error) {
 	if _, err := gptauth.WriteAuthFile(home, merged); err != nil {
 		return "", err
 	}
-	// 记录最后激活时间
 	now := time.Now().UTC()
 	acc.LastUsedAt = &now
 	_ = st.Save()
-	text := "已激活 " + acc.Label + ",已写入 Codex 凭据(" + gptauth.AuthFilePath(home) + ")"
-	return text, nil
+	return "已激活 " + acc.Label + ",已写入 Codex 凭据(" + gptauth.AuthFilePath(home) + ")", nil
 }
 
 // doRemove 从账号库移除,不动官方 auth.json。
@@ -579,87 +581,13 @@ func (m *ChatgptModel) doRemove(id string) error {
 	if err != nil {
 		return err
 	}
-	_, ok := st.Remove(id)
-	if !ok {
+	if _, ok := st.Remove(id); !ok {
 		return fmt.Errorf("在账号库中找不到 %q", id)
 	}
 	return st.Save()
 }
 
-// parseJSONDocs 解析导入输入,尽量宽容:
-//  1. 连续多段 JSON —— 单个对象/数组、CPA、sub2api 整包、拼接 JSON 均可;
-//  2. JSONL(每行一个 JSON 对象,常见于批量导出);
-//  3. 上述失败时退回逐行解析,跳过无效行并计数。
-//
-// 返回解析出的文档列表与被忽略的无效文档数。
-func parseJSONDocs(data []byte) (docs []any, badDocs int, err error) {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	for {
-		var v any
-		if derr := dec.Decode(&v); derr != nil {
-			if errors.Is(derr, io.EOF) {
-				return docs, 0, nil
-			}
-			break // 语法错误:退回逐行解析
-		}
-		docs = append(docs, v)
-	}
-	docs = nil
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var v any
-		if json.Unmarshal([]byte(line), &v) == nil {
-			docs = append(docs, v)
-		} else {
-			badDocs++
-		}
-	}
-	if len(docs) == 0 {
-		return nil, badDocs, errors.New("未能解析出任何 JSON 文档")
-	}
-	return docs, badDocs, nil
-}
-
-func expandHome(p string) string {
-	if p == "~" {
-		home, _ := os.UserHomeDir()
-		return home
-	}
-	if strings.HasPrefix(p, "~/") {
-		home, err := os.UserHomeDir()
-		if err == nil {
-			return filepath.Join(home, p[2:])
-		}
-	}
-	return p
-}
-
-func firstNonEmptyStr(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-// mask 让 token 不进终端回滚区:只留前缀与长度。
-func mask(token string) string {
-	if token == "" {
-		return "(空)"
-	}
-	preview := 12
-	if len(token) < preview {
-		preview = len(token)
-	}
-	return token[:preview] + "…(共 " + strconv.Itoa(len(token)) + " 字符)"
-}
-
-// ───────────────────────── 视图 ─────────────────────────
-
+// currentLine 顶部当前凭据状态行。
 func (m ChatgptModel) currentLine() string {
 	if m.loadErr != nil {
 		return styleErr.Render("加载失败:" + m.loadErr.Error())
@@ -667,16 +595,16 @@ func (m ChatgptModel) currentLine() string {
 	if m.current == nil {
 		return styleWarn.Render("当前凭据:auth.json 不存在(官方端尚未登录)")
 	}
-	line := "当前凭据:" + orDash(m.current.AuthMode)
+	line := "当前凭据:" + prettyAuthMode(m.current.AuthMode)
 	if m.current.Email != "" {
-		line += " · " + m.current.Email
+		line += " | " + m.current.Email
 	} else if m.current.AccountID != "" {
-		line += " · account " + shortID(m.current.AccountID)
+		line += " | " + shortID(m.current.AccountID)
 	} else if m.current.AuthMode == "apikey" {
 		line += "(API Key 认证,无 ChatGPT token)"
 	}
 	if m.current.LastRefresh != "" {
-		line += styleDim.Render(" · last_refresh " + m.current.LastRefresh)
+		line += styleDim.Render(" | 最近刷新 " + refreshText(m.current.LastRefresh))
 	}
 	return line
 }
@@ -722,7 +650,6 @@ func (m ChatgptModel) accountTable() string {
 			mark,
 		})
 	}
-	// 表头置灰
 	for i, cell := range rows[0] {
 		rows[0][i] = styleDim.Render(cell)
 	}
@@ -738,10 +665,13 @@ func (m ChatgptModel) View() string {
 		w = 80
 	}
 
-	rowsBlock := "(空)按 i 导入 WebSession / sub2api 导出的 JSON,或 s 保存当前登录凭据"
-	if len(m.accounts) > 0 {
-		rowsBlock = "\n" + m.accountTable()
+	var rowLines []string
+	if len(m.accounts) == 0 {
+		rowLines = append(rowLines, styleDim.Render("(空)按 i 导入 WebSession / sub2api 导出的 JSON,或 s 保存当前登录凭据"))
+	} else {
+		rowLines = append(rowLines, m.accountTable())
 	}
+	rowsBlock := strings.Join(rowLines, "\n")
 	bodyW := max(lipgloss.Width(rowsBlock), 56)
 	if bodyW > w-2 {
 		bodyW = w - 2
@@ -757,6 +687,7 @@ func (m ChatgptModel) View() string {
 	body.WriteString(rowsBlock + "\n\n")
 	body.WriteString(m.renderStatus() + "\n")
 
+	overlay := ""
 	switch m.mode {
 	case modeInput:
 		purpose := "导入 ChatGPT 会话凭据(WebSession / sub2api)"
@@ -765,21 +696,23 @@ func (m ChatgptModel) View() string {
 		} else if m.inputFor == inputGRename {
 			purpose = "重命名账号"
 		}
-		body.WriteString("\n" + styleBox.Render(purpose+"\n"+m.input.View()) + "\n")
+		overlay = styleBox.Render(purpose + "\n" + m.input.View())
 	case modeDetail:
 		if sel := m.selected(); sel != nil {
-			body.WriteString("\n" + styleBox.Render(m.detailView(sel)) + "\n")
+			overlay = styleBox.Render(m.detailView(sel))
 		}
 	case modeHelp:
-		body.WriteString("\n" + styleBox.Render(cHelpView()) + "\n")
+		overlay = styleBox.Render(cHelpView())
 	case modeMachine:
-		body.WriteString("\n" + styleBox.Render(m.infoView()) + "\n")
+		overlay = styleBox.Render(m.infoView())
 	}
 
 	footer := m.bottomBar(&cinfo, cChips)
-	return m.header(&cinfo) + "\n" +
-		centerBlock(body.String(), w) + "\n" +
-		centerBlock(footer, w)
+	page := m.header(&cinfo) + "\n" + centerBlock(body.String(), w) + "\n"
+	if overlay != "" {
+		page += m.centerBox(overlay) + "\n"
+	}
+	return page + centerBlock(footer, w)
 }
 
 func (m ChatgptModel) findByID(id string) *gptstore.Account {
@@ -789,6 +722,99 @@ func (m ChatgptModel) findByID(id string) *gptstore.Account {
 		}
 	}
 	return nil
+}
+
+// prettyAuthMode 认证模式的展示名(官方值为小写,展示遵循大小写)。
+func prettyAuthMode(mode string) string {
+	switch mode {
+	case "chatgpt":
+		return "ChatGPT"
+	case "apikey":
+		return "API Key"
+	}
+	return mode
+}
+
+// refreshText 把 last_refresh 的时间戳转成本地短格式,解析失败原样返回。
+func refreshText(raw string) string {
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t.Local().Format("2006-01-02 15:04")
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t.Local().Format("2006-01-02 15:04")
+	}
+	return raw
+}
+
+// mask 让 token 不进终端回滚区:只留前缀与长度。
+func mask(token string) string {
+	if token == "" {
+		return "(空)"
+	}
+	preview := 12
+	if len(token) < preview {
+		preview = len(token)
+	}
+	return token[:preview] + "…(共 " + strconv.Itoa(len(token)) + " 字符)"
+}
+
+// expandHome 展开 ~ 前缀。
+func expandHome(p string) string {
+	if p == "~" {
+		home, _ := os.UserHomeDir()
+		return home
+	}
+	if strings.HasPrefix(p, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, p[2:])
+		}
+	}
+	return p
+}
+
+func firstNonEmptyStr(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// parseJSONDocs 解析导入输入,尽量宽容:
+//  1. 连续多段 JSON —— 单个对象/数组、CPA、sub2api 整包、拼接 JSON 均可;
+//  2. JSONL(每行一个 JSON 对象,常见于批量导出);
+//  3. 上述失败时退回逐行解析,跳过无效行并计数。
+func parseJSONDocs(data []byte) (docs []any, badDocs int, err error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	for {
+		var v any
+		if derr := dec.Decode(&v); derr != nil {
+			if errors.Is(derr, io.EOF) {
+				return docs, 0, nil
+			}
+			break
+		}
+		docs = append(docs, v)
+	}
+	docs = nil
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var v any
+		if json.Unmarshal([]byte(line), &v) == nil {
+			docs = append(docs, v)
+		} else {
+			badDocs++
+		}
+	}
+	if len(docs) == 0 {
+		return nil, badDocs, errors.New("未能解析出任何 JSON 文档")
+	}
+	return docs, badDocs, nil
 }
 
 // infoView "m 信息"面板:官方目录与账号库状态。
@@ -801,15 +827,15 @@ func (m ChatgptModel) infoView() string {
 	}
 	current := styleDim.Render("(未登录)")
 	if m.current != nil {
-		cur := accentSt.Render(orDash(m.current.AuthMode))
+		cur := accentSt.Render(prettyAuthMode(m.current.AuthMode))
 		if m.current.Email != "" {
-			cur += " · " + val.Render(m.current.Email)
+			cur += " | " + val.Render(m.current.Email)
 		}
 		if m.current.AccountID != "" {
-			cur += " · " + styleDim.Render(m.current.AccountID)
+			cur += " | " + styleDim.Render(m.current.AccountID)
 		}
 		if m.current.LastRefresh != "" {
-			cur += " · " + styleDim.Render("last_refresh "+m.current.LastRefresh)
+			cur += styleDim.Render(" | 最近刷新 " + refreshText(m.current.LastRefresh))
 		}
 		current = cur
 	}
