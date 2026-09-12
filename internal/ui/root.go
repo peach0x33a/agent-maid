@@ -112,11 +112,10 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.sel.Init()
 	case settingsOpenMsg:
 		m.screen = screenSettings
-		m.set = NewSettings()
 		return m, m.set.Init()
 	case reopenWizardMsg:
+		m.wiz.Reset()
 		m.screen = screenWizard
-		m.wiz = NewWizard()
 		return m, m.wiz.Init()
 	case tea.WindowSizeMsg:
 		// 广播给全部注册实例:未进入的管理器也要保持宽度等状态新鲜

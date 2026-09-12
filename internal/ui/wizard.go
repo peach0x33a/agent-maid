@@ -28,6 +28,13 @@ type WizardModel struct {
 // NewWizard 创建向导。
 func NewWizard() WizardModel { return WizardModel{} }
 
+// Reset 重置向导进度(保留已知的终端尺寸)。
+func (w *WizardModel) Reset() {
+	w.step = 0
+	w.gradOK = false
+	w.symBroken = false
+}
+
 func (m WizardModel) Init() tea.Cmd { return nil }
 
 func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
