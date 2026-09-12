@@ -69,8 +69,8 @@ func (m SettingsModel) View() string {
 	}
 
 	items := []string{
-		m.item("纯文本模式", togglePill(plainMode), m.cursor == 0),
-		m.item("动画", togglePill(!noAnim), m.cursor == 1),
+		m.item("纯文本模式", toggleCheck(plainMode), m.cursor == 0),
+		m.item("动画", toggleCheck(!noAnim), m.cursor == 1),
 		m.item("重新运行设置向导", "", m.cursor == 2),
 	}
 
@@ -85,15 +85,12 @@ func (m SettingsModel) View() string {
 	return lipgloss.Place(w, m.height, lipgloss.Center, lipgloss.Center, b.String())
 }
 
-// togglePill 胶囊开关:开=绿色轨道圆点居右,关=灰色轨道圆点居左。
-func togglePill(on bool) string {
-	knob := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#15151E"))
+// toggleCheck 定宽复选样式([ x ] / [   ]):纯 ASCII,开/关宽度严格一致。
+func toggleCheck(on bool) string {
 	if on {
-		return lipgloss.NewStyle().Background(lipgloss.Color("42")).
-			Render("    " + knob.Background(lipgloss.Color("42")).Render("● "))
+		return styleOk.Bold(true).Render("[x]")
 	}
-	return lipgloss.NewStyle().Background(lipgloss.Color("240")).
-		Render(" " + knob.Background(lipgloss.Color("240")).Render("●") + "   ")
+	return styleDim.Render("[ ]")
 }
 
 // item 设置条目:文本左对齐,控件(胶囊/数值)右对齐,整体在设置块内对齐。
