@@ -569,39 +569,43 @@ func (m ZcodeModel) currentLine() string {
 	return line
 }
 
-func (m ZcodeModel) slotRow(i int) string {
-	slot := m.slots[i]
-	inUse := m.current.Exists && zcode.EqualCredentials(m.current.Creds, slot.Credentials)
+// slotTable 渲染槽位列表表格(表头 + 动态列宽)。
+func (m ZcodeModel) slotTable() string {
+	rows := [][]string{{"", "槽位", "账号", "最后使用", "状态"}}
+	for i, slot := range m.slots {
+		inUse := m.current.Exists && zcode.EqualCredentials(m.current.Creds, slot.Credentials)
 
-	cursor := "  "
-	var nameStyle lipgloss.Style
-	switch {
-	case i == m.cursor:
-		cursor = styleSel.Render(cursorGlyph())
-		nameStyle = styleSel
-	case inUse:
-		nameStyle = styleInUseName
-	default:
-		nameStyle = stylePlainName
-	}
+		cursor := "  "
+		nameStyle := stylePlainName
+		switch {
+		case i == m.cursor:
+			cursor = styleSel.Render("❯ ")
+			nameStyle = styleSel
+		case inUse:
+			nameStyle = styleInUseName
+		}
 
-	name := slot.Name
-	if len(name) > 24 {
-		name = name[:24]
+		name := slot.Name
+		if len(name) > 24 {
+			name = name[:24]
+		}
+
+		mark := ""
+		if inUse {
+			mark = badgeInUse()
+		}
+		if slot.KeyFingerprint != zcode.KeyFingerprint(zcode.DeriveKey(zcode.CredentialSecret())) {
+			mark += styleWarn.Render(" ⚠跨机/跨密钥")
+		}
+
+		rows = append(rows, []string{
+			cursor + nameStyle.Render(name),
+			zcodeAccountLabel(slot.Meta),
+			shortTime(slot.LastUsedAt),
+			mark,
+		})
 	}
-	mark := ""
-	switch {
-	case m.switchArm && m.switchName == slot.Name && i == m.cursor:
-		mark = " " + confirmBadge(&zinfo)
-	case inUse:
-		mark = " " + badgeInUse()
-	}
-	warn := ""
-	if slot.KeyFingerprint != zcode.KeyFingerprint(zcode.DeriveKey(zcode.CredentialSecret())) {
-		warn = styleWarn.Render(" ⚠跨机/跨密钥")
-	}
-	meta := zcodeAccountLabel(slot.Meta) + " " + styleDim.Render(shortTime(slot.LastUsedAt))
-	return fmt.Sprintf("%s%s %s%s%s", cursor, nameStyle.Render(fmt.Sprintf("%-26s", name)), meta, mark, warn)
+	return joinTable(rows)
 }
 
 func (m ZcodeModel) View() string {
@@ -614,15 +618,10 @@ func (m ZcodeModel) View() string {
 	}
 
 	// 列表先行,正文块宽度按内容计算,整体在终端内水平居中
-	var rowLines []string
-	if len(m.slots) == 0 {
-		rowLines = append(rowLines, styleDim.Render("(空)按 s 保存当前账号,或 S 快速保存"))
-	} else {
-		for i := range m.slots {
-			rowLines = append(rowLines, m.slotRow(i))
-		}
+	rowsBlock := "(空)按 s 保存当前账号,或 S 快速保存"
+	if len(m.slots) > 0 {
+		rowsBlock = "\n" + m.slotTable()
 	}
-	rowsBlock := strings.Join(rowLines, "\n")
 	bodyW := max(lipgloss.Width(rowsBlock), 46)
 	if bodyW > w-2 {
 		bodyW = w - 2

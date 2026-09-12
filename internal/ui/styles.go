@@ -2,6 +2,7 @@
 package ui
 
 import (
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -47,4 +48,39 @@ func shortID8(id string) string {
 		return id[:8]
 	}
 	return id
+}
+
+// joinTable 把已样式化的单元格行渲染为列宽对齐的表格:
+// 每列宽度取该列最大显示宽度,最后一列不填充(内容可变长)。
+func joinTable(rows [][]string) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	cols := 0
+	for _, r := range rows {
+		if len(r) > cols {
+			cols = len(r)
+		}
+	}
+	widths := make([]int, cols)
+	for _, r := range rows {
+		for i, cell := range r {
+			if w := lipgloss.Width(cell); w > widths[i] {
+				widths[i] = w
+			}
+		}
+	}
+	var out []string
+	for _, r := range rows {
+		parts := make([]string, 0, len(r))
+		for i, cell := range r {
+			if i == len(r)-1 {
+				parts = append(parts, cell)
+				continue
+			}
+			parts = append(parts, lipgloss.NewStyle().Width(widths[i]).Render(cell))
+		}
+		out = append(out, strings.TrimSpace(strings.Join(parts, "  ")))
+	}
+	return strings.Join(out, "\n")
 }

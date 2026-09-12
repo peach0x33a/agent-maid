@@ -430,35 +430,40 @@ func (m AntigravityModel) currentLine() string {
 	return line
 }
 
-func (m AntigravityModel) slotRow(i int) string {
-	slot := m.slots[i]
-	inUse := m.current.Exists && antigravity.EqualCreds(m.current.Creds, slot.OAuthCreds)
+// slotTable 渲染槽位列表表格(表头 + 动态列宽)。
+func (m AntigravityModel) slotTable() string {
+	rows := [][]string{{"", "槽位", "邮箱", "最后使用", "状态"}}
+	for i, slot := range m.slots {
+		inUse := m.current.Exists && antigravity.EqualCreds(m.current.Creds, slot.OAuthCreds)
 
-	cursor := "  "
-	var nameStyle lipgloss.Style
-	switch {
-	case i == m.cursor:
-		cursor = styleSel.Render(cursorGlyph())
-		nameStyle = styleSel
-	case inUse:
-		nameStyle = styleInUseName
-	default:
-		nameStyle = stylePlainName
-	}
+		cursor := "  "
+		nameStyle := stylePlainName
+		switch {
+		case i == m.cursor:
+			cursor = styleSel.Render("❯ ")
+			nameStyle = styleSel
+		case inUse:
+			nameStyle = styleInUseName
+		}
 
-	name := slot.Name
-	if len(name) > 24 {
-		name = name[:24]
+		name := slot.Name
+		if len(name) > 24 {
+			name = name[:24]
+		}
+
+		mark := ""
+		if inUse {
+			mark = badgeInUse()
+		}
+
+		rows = append(rows, []string{
+			cursor + nameStyle.Render(name),
+			orDefault(slot.Email, "未知账号"),
+			shortTime(slot.LastUsedAt),
+			mark,
+		})
 	}
-	mark := ""
-	switch {
-	case m.switchArm && m.switchName == slot.Name && i == m.cursor:
-		mark = " " + confirmBadge(&ainfo)
-	case inUse:
-		mark = " " + badgeInUse()
-	}
-	meta := orDefault(slot.Email, "未知账号") + " " + styleDim.Render(shortTime(slot.LastUsedAt))
-	return fmt.Sprintf("%s%s %s%s", cursor, nameStyle.Render(fmt.Sprintf("%-26s", name)), meta, mark)
+	return joinTable(rows)
 }
 
 func (m AntigravityModel) View() string {
@@ -470,15 +475,10 @@ func (m AntigravityModel) View() string {
 		w = 80
 	}
 
-	var rowLines []string
-	if len(m.slots) == 0 {
-		rowLines = append(rowLines, styleDim.Render("(空)按 s 保存当前 Google 账号,或 S 快速保存"))
-	} else {
-		for i := range m.slots {
-			rowLines = append(rowLines, m.slotRow(i))
-		}
+	rowsBlock := "(空)按 s 保存当前 Google 账号,或 S 快速保存"
+	if len(m.slots) > 0 {
+		rowsBlock = "\n" + m.slotTable()
 	}
-	rowsBlock := strings.Join(rowLines, "\n")
 	bodyW := max(lipgloss.Width(rowsBlock), 46)
 	if bodyW > w-2 {
 		bodyW = w - 2

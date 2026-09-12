@@ -681,49 +681,48 @@ func (m ChatgptModel) currentLine() string {
 	return line
 }
 
-func (m ChatgptModel) accountRow(i int) string {
-	a := m.accounts[i]
-	inUse := m.current != nil && a.AccountID != "" && a.AccountID == m.current.AccountID
+// accountTable 渲染账号列表表格(表头 + 动态列宽)。
+func (m ChatgptModel) accountTable() string {
+	rows := [][]string{{"", "账号", "套餐", "来源", "ID", "最后使用", "状态"}}
+	for i, a := range m.accounts {
+		inUse := m.current != nil && a.AccountID != "" && a.AccountID == m.current.AccountID
 
-	cursor := "  "
-	var nameStyle lipgloss.Style
-	switch {
-	case i == m.cursor:
-		cursor = styleSel.Render(cursorGlyph())
-		nameStyle = styleSel
-	case inUse:
-		nameStyle = styleInUseName
-	default:
-		nameStyle = stylePlainName
-	}
+		cursor := "  "
+		nameStyle := stylePlainName
+		switch {
+		case i == m.cursor:
+			cursor = styleSel.Render("❯ ")
+			nameStyle = styleSel
+		case inUse:
+			nameStyle = styleInUseName
+		}
 
-	name := a.Label
-	if len(name) > 30 {
-		name = name[:30]
+		name := a.Label
+		if len(name) > 30 {
+			name = name[:30]
+		}
+
+		mark := ""
+		if inUse {
+			mark = badgeInUse()
+		}
+		if !a.Refreshable {
+			mark += styleWarn.Render(" ⚠无refresh_token")
+		}
+		if a.AccountID == "" {
+			mark += styleWarn.Render(" ⚠缺account_id")
+		}
+
+		rows = append(rows, []string{
+			cursor + nameStyle.Render(name),
+			orDash(a.PlanType),
+			"[" + a.SourceFormat + "]",
+			shortID8(a.AccountID),
+			shortTime(a.LastUsedAt),
+			mark,
+		})
 	}
-	mark := ""
-	switch {
-	case m.switchArm && m.switchName == a.ID && i == m.cursor:
-		mark = " " + confirmBadge(&cinfo)
-	case inUse:
-		mark = " " + badgeInUse()
-	}
-	warn := ""
-	if !a.Refreshable {
-		warn += styleWarn.Render(" ⚠无refresh_token")
-	}
-	if a.AccountID == "" {
-		warn += styleWarn.Render(" ⚠缺account_id")
-	}
-	plan := orDash(a.PlanType)
-	source := a.SourceFormat
-	return fmt.Sprintf("%s%s %s %s %s%s%s",
-		cursor,
-		nameStyle.Render(fmt.Sprintf("%-30s", name)),
-		styleDim.Render(fmt.Sprintf("%-8s", plan)),
-		styleDim.Render(fmt.Sprintf("[%s]", source)),
-		styleDim.Render(shortID8(a.AccountID))+" "+styleDim.Render(shortTime(a.LastUsedAt)),
-		mark, warn)
+	return joinTable(rows)
 }
 
 func (m ChatgptModel) View() string {
@@ -735,15 +734,10 @@ func (m ChatgptModel) View() string {
 		w = 80
 	}
 
-	var rowLines []string
-	if len(m.accounts) == 0 {
-		rowLines = append(rowLines, styleDim.Render("(空)按 i 导入 WebSession / sub2api 导出的 JSON,或 s 保存当前登录凭据"))
-	} else {
-		for i := range m.accounts {
-			rowLines = append(rowLines, m.accountRow(i))
-		}
+	rowsBlock := "(空)按 i 导入 WebSession / sub2api 导出的 JSON,或 s 保存当前登录凭据"
+	if len(m.accounts) > 0 {
+		rowsBlock = "\n" + m.accountTable()
 	}
-	rowsBlock := strings.Join(rowLines, "\n")
 	bodyW := max(lipgloss.Width(rowsBlock), 56)
 	if bodyW > w-2 {
 		bodyW = w - 2
