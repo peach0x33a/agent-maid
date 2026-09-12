@@ -82,7 +82,7 @@ func (m SettingsModel) View() string {
 	b.WriteString(styleDim.Render("纯文本模式:不渲染块状图标与特殊符号,适合不支持这些字符的终端。"))
 	b.WriteString("\n\n")
 	b.WriteString(styleHelp.Render("↑/↓ 选择 · Enter 切换/执行 · Esc 返回"))
-	return lipgloss.Place(w, m.height, lipgloss.Center, lipgloss.Center, b.String())
+	return centerScreen(b.String(), w, m.height)
 }
 
 // toggleCheck 定宽复选样式([ x ] / [   ]):纯 ASCII,开/关宽度严格一致。

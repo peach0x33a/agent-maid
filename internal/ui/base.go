@@ -303,6 +303,39 @@ func (b baseModel) bottomBar(info *targetInfo, chips []chip) string {
 	return bar + "\n" + hint
 }
 
+// centerBlock 整块水平居中:所有行加统一左填充,保持块内相对对齐。
+// (lipgloss.Place/Align 的 Center 是逐行居中,会把宽度不同的行各自偏移)
+func centerBlock(block string, w int) string {
+	lines := strings.Split(block, "\n")
+	maxW := 0
+	for _, l := range lines {
+		if lw := lipgloss.Width(l); lw > maxW {
+			maxW = lw
+		}
+	}
+	padW := (w - maxW) / 2
+	if padW < 0 {
+		padW = 0
+	}
+	pad := strings.Repeat(" ", padW)
+	for i, l := range lines {
+		lines[i] = pad + l
+	}
+	return strings.Join(lines, "\n")
+}
+
+// centerScreen 整块水平垂直居中(整屏页面用)。
+func centerScreen(block string, w, h int) string {
+	body := centerBlock(block, w)
+	lines := strings.Split(body, "\n")
+	padH := (h - len(lines)) / 2
+	if padH > 0 {
+		head := make([]string, padH)
+		lines = append(head, lines...)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // centerBox 将盒状面板按终端宽度水平居中。
 func (b baseModel) centerBox(box string) string {
 	w := b.width

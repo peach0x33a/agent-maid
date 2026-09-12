@@ -114,7 +114,7 @@ func (m WizardModel) View() string {
 		b.WriteString("以上字符是否全部正常显示(没有方框、问号或乱码)?\n\n")
 		b.WriteString(styleHelp.Render("y 支持    n 不支持(将启用纯文本界面)"))
 	}
-	return lipgloss.Place(w, m.height, lipgloss.Center, lipgloss.Center, b.String())
+	return centerScreen(b.String(), w, m.height)
 }
 
 // box 向导卡片外框。

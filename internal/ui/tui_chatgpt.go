@@ -778,8 +778,8 @@ func (m ChatgptModel) View() string {
 
 	footer := m.bottomBar(&cinfo, cChips)
 	return m.header(&cinfo) + "\n" +
-		lipgloss.PlaceHorizontal(w, lipgloss.Center, body.String()) + "\n" +
-		lipgloss.PlaceHorizontal(w, lipgloss.Center, footer)
+		centerBlock(body.String(), w) + "\n" +
+		centerBlock(footer, w)
 }
 
 func (m ChatgptModel) findByID(id string) *gptstore.Account {

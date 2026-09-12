@@ -103,7 +103,7 @@ func zcodeAccountLabel(meta zcode.AccountMeta) string {
 	if len(parts) == 0 {
 		return "未知账号(密钥不匹配或凭据为空)"
 	}
-	return strings.Join(parts, " · ")
+	return strings.Join(parts, " / ")
 }
 
 // ───────────────────────── 数据 ─────────────────────────
@@ -684,8 +684,8 @@ func (m ZcodeModel) View() string {
 
 	footer := m.bottomBar(&zinfo, zChips)
 	return m.header(&zinfo) + "\n" +
-		lipgloss.PlaceHorizontal(w, lipgloss.Center, body.String()) + "\n" +
-		lipgloss.PlaceHorizontal(w, lipgloss.Center, footer)
+		centerBlock(body.String(), w) + "\n" +
+		centerBlock(footer, w)
 }
 
 func zMachineView() string {

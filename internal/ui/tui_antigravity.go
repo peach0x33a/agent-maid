@@ -520,8 +520,8 @@ func (m AntigravityModel) View() string {
 
 	footer := m.bottomBar(&ainfo, aChips)
 	return m.header(&ainfo) + "\n" +
-		lipgloss.PlaceHorizontal(w, lipgloss.Center, body.String()) + "\n" +
-		lipgloss.PlaceHorizontal(w, lipgloss.Center, footer)
+		centerBlock(body.String(), w) + "\n" +
+		centerBlock(footer, w)
 }
 
 func aInfoView(m AntigravityModel) string {
