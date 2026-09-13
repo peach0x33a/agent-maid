@@ -150,6 +150,65 @@ func (s *Store) TouchLastUsed(name string, t time.Time) error {
 	return err
 }
 
+// TrashDir 返回回收站目录。
+func (s *Store) TrashDir() string { return filepath.Join(s.Dir, "trash") }
+
+// DeleteToTrash 删除槽位并移入回收站,返回回收站内文件名。
+func (s *Store) DeleteToTrash(name string) (string, error) {
+	src, err := s.slotPath(name)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(src); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(s.TrashDir(), 0o700); err != nil {
+		return "", err
+	}
+	dst := filepath.Join(s.TrashDir(), fmt.Sprintf("%d-%s.json", time.Now().UnixNano(), name))
+	if err := os.Rename(src, dst); err != nil {
+		return "", err
+	}
+	return filepath.Base(dst), nil
+}
+
+// RestoreLatestFromTrash 从回收站恢复最近删除的槽位,返回槽位名。
+func (s *Store) RestoreLatestFromTrash() (string, error) {
+	entries, err := os.ReadDir(s.TrashDir())
+	if err != nil {
+		return "", errors.New("回收站为空")
+	}
+	var latest string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") && e.Name() > latest {
+			latest = e.Name()
+		}
+	}
+	if latest == "" {
+		return "", errors.New("回收站为空")
+	}
+	data, err := os.ReadFile(filepath.Join(s.TrashDir(), latest))
+	if err != nil {
+		return "", err
+	}
+	var slot Slot
+	if err := json.Unmarshal(data, &slot); err != nil {
+		return "", fmt.Errorf("回收站文件损坏: %w", err)
+	}
+	if _, err := s.Save(slot.Name, slot); err != nil {
+		return "", err
+	}
+	if err := os.Remove(filepath.Join(s.TrashDir(), latest)); err != nil {
+		return "", err
+	}
+	return slot.Name, nil
+}
+
+// PurgeTrash 清空回收站(正式删除)。
+func (s *Store) PurgeTrash() error {
+	return os.RemoveAll(s.TrashDir())
+}
+
 // Delete 删除槽位。
 func (s *Store) Delete(name string) error {
 	path, err := s.slotPath(name)

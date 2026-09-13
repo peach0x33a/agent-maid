@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -132,6 +133,73 @@ func (s *Store) Find(target string) (*Account, int) {
 		return nil, -1
 	}
 	return s.Data.Accounts[hits], hits
+}
+
+// trashDir 返回账号回收站目录。
+func (s *Store) trashDir() string {
+	return filepath.Join(filepath.Dir(s.Path), "trash")
+}
+
+// DeleteToTrash 把账号移入回收站(从账号库移除但保留副本),返回回收站文件名。
+func (s *Store) DeleteToTrash(target string) (string, error) {
+	acc, ok := s.Remove(target)
+	if !ok {
+		return "", fmt.Errorf("在账号库中找不到 %q", target)
+	}
+	dir := s.trashDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	data, err := json.MarshalIndent(acc, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	name := fmt.Sprintf("%d-account.json", time.Now().UnixNano())
+	if err := atomicio.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+		return "", err
+	}
+	if err := s.Save(); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// RestoreLatestFromTrash 从回收站恢复最近删除的账号,返回显示名。
+func (s *Store) RestoreLatestFromTrash() (string, error) {
+	entries, err := os.ReadDir(s.trashDir())
+	if err != nil {
+		return "", errors.New("回收站为空")
+	}
+	var latest string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") && e.Name() > latest {
+			latest = e.Name()
+		}
+	}
+	if latest == "" {
+		return "", errors.New("回收站为空")
+	}
+	data, err := os.ReadFile(filepath.Join(s.trashDir(), latest))
+	if err != nil {
+		return "", err
+	}
+	var acc Account
+	if err := json.Unmarshal(data, &acc); err != nil {
+		return "", fmt.Errorf("回收站文件损坏: %w", err)
+	}
+	s.Upsert(&acc)
+	if err := s.Save(); err != nil {
+		return "", err
+	}
+	if err := os.Remove(filepath.Join(s.trashDir(), latest)); err != nil {
+		return "", err
+	}
+	return acc.Label, nil
+}
+
+// PurgeTrash 清空回收站(正式删除)。
+func (s *Store) PurgeTrash() error {
+	return os.RemoveAll(s.trashDir())
 }
 
 func (s *Store) Remove(target string) (*Account, bool) {

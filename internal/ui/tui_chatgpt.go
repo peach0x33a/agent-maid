@@ -45,6 +45,7 @@ var cChips = []chip{
 	{"i", "[I]mport 导入"},
 	{"r", "[R]ename 重命名"},
 	{"d", "[D]elete 删除"},
+	{"z", "[Z]ndo 撤销"},
 	{"n", "[N]ew 新建"},
 	{"m", "[M]eta 信息"},
 	{"?", "[?]Help 帮助"},
@@ -54,7 +55,8 @@ type ChatgptModel struct {
 	baseModel
 
 	loadErr    error
-	positioned bool // 首次加载数据后已把光标定位到使用中的账号
+	positioned bool     // 首次加载数据后已把光标定位到使用中的账号
+	trashStack []string // 回收站文件名栈(撤销用)
 
 	accounts []*gptstore.Account
 	activeID string
@@ -70,6 +72,7 @@ type ChatgptModel struct {
 
 // NewChatgpt 创建 ChatGPT 管理器。
 func NewChatgpt() ChatgptModel {
+	purgeGptTrash()
 	ti := textinput.New()
 	ti.Placeholder = "JSON 文件路径,或直接粘贴 JSON"
 	ti.CharLimit = 0
@@ -91,6 +94,13 @@ type cLoadedMsg struct {
 	home     string
 	codexRun bool
 	err      error
+}
+
+// purgeGptTrash 清空账号回收站(正式删除,每次启动执行一次)。
+func purgeGptTrash() {
+	if st, err := gptstore.Load(gptstore.DefaultPath()); err == nil {
+		_ = st.PurgeTrash()
+	}
 }
 
 func (m ChatgptModel) refresh() tea.Msg {
@@ -175,9 +185,14 @@ func (m ChatgptModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
 	switch key.String() {
 	case "ctrl+c":
 		m.quit = true
+		purgeGptTrash()
 		return m, tea.Quit
 	case "q", "Q":
-		return m, m.handleQuitKey()
+		cmd := m.handleQuitKey()
+		if m.quit {
+			purgeGptTrash()
+		}
+		return m, cmd
 	case "esc":
 		return m, backCmd
 	case "left":
@@ -247,12 +262,38 @@ func (m ChatgptModel) dispatch(key string) (Manager, tea.Cmd) {
 		}
 		if m.deleteArm && m.deleteName == sel.ID {
 			m.clearPrompt()
-			err := m.doRemove(sel.ID)
-			m.setStatus(err, "已从账号库移除 "+sel.Label+"(官方 auth.json 未改动)", "移除失败")
+			st, lerr := gptstore.Load(gptstore.DefaultPath())
+			if lerr != nil {
+				m.status = status{2, "读取账号库失败: " + lerr.Error()}
+				return m, nil
+			}
+			trashName, err := st.DeleteToTrash(sel.ID)
+			if err == nil {
+				m.trashStack = append(m.trashStack, trashName)
+				m.setStatus(nil, "已移除账号 "+sel.Label+"(移入回收站,退出前可按 z 撤销)", "")
+			} else {
+				m.setStatus(err, "", "移除失败")
+			}
 			return m, func() tea.Msg { return cRefreshMsg{} }
 		}
 		cmd := m.armPrompt(sel.ID, fmt.Sprintf("再按一次 d 删除账号 %q", sel.Label))
 		return m, cmd
+	case "z", "Z": // 撤销:从回收站恢复最近删除的账号
+		st, lerr := gptstore.Load(gptstore.DefaultPath())
+		if lerr != nil {
+			m.status = status{2, "读取账号库失败: " + lerr.Error()}
+			return m, nil
+		}
+		name, err := st.RestoreLatestFromTrash()
+		if err != nil {
+			m.status = status{3, "没有可撤销的删除"}
+			return m, nil
+		}
+		if n := len(m.trashStack); n > 0 {
+			m.trashStack = m.trashStack[:n-1]
+		}
+		m.status = status{1, "已恢复账号 " + name}
+		return m, func() tea.Msg { return cRefreshMsg{} }
 	case "n", "N": // 登出:清空本地 auth.json(账号保留在账号库)
 		if m.current == nil {
 			m.status = status{2, "当前未登录,无需登出"}
@@ -934,7 +975,8 @@ func cHelpView() string {
 		"s            保存当前 auth.json 凭据到账号库(输入显示名)",
 		"S            快存当前凭据(自动命名)",
 		"r            重命名选中账号",
-		"d            从账号库移除(按两次 d 确认,不动官方 auth.json)",
+		"d            从账号库移除(按两次 d 确认,移入回收站;退出前可按 z 撤销)",
+		"z            撤销最近一次删除",
 		"m            查看官方目录/账号库信息",
 		"?            本帮助",
 		"Esc          返回目标软件选择",

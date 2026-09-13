@@ -37,6 +37,7 @@ var zChips = []chip{
 	{"s", "[S]ave 保存"},
 	{"r", "[R]ename 重命名"},
 	{"d", "[D]elete 删除"},
+	{"z", "[Z]ndo 撤销"},
 	{"n", "[N]ew 新建"},
 	{"m", "[M]achine 信息"},
 	{"?", "[?]Help 帮助"},
@@ -68,15 +69,18 @@ type ZcodeModel struct {
 	waitingFor string
 	waitProcs  []zcode.Proc
 	waitStart  time.Time
-	spin       int // 等待界面 spinner 帧序号
+	spin       int      // 等待界面 spinner 帧序号
+	trashStack []string // 回收站文件名栈(撤销用)
 }
 
 // NewZcode 创建 ZCode 管理器。
 func NewZcode() ZcodeModel {
+	svc := zcodeapp.New()
+	_ = svc.Store.PurgeTrash() // 上次会话的回收站:正式删除(每次启动一次)
 	ti := textinput.New()
 	ti.Placeholder = "槽位名,如 work"
 	ti.CharLimit = 64
-	return ZcodeModel{svc: zcodeapp.New(), input: ti}
+	return ZcodeModel{svc: svc, input: ti}
 }
 
 // Info 实现 Manager。
@@ -282,9 +286,14 @@ func (m ZcodeModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
 	switch key.String() {
 	case "ctrl+c":
 		m.quit = true
+		_ = m.svc.Store.PurgeTrash()
 		return m, tea.Quit
 	case "q", "Q":
-		return m, m.handleQuitKey()
+		cmd := m.handleQuitKey()
+		if m.quit {
+			_ = m.svc.Store.PurgeTrash()
+		}
+		return m, cmd
 	case "esc":
 		return m, backCmd
 	case "left":
@@ -352,12 +361,28 @@ func (m ZcodeModel) dispatch(key string) (Manager, tea.Cmd) {
 		}
 		if m.deleteArm && m.deleteName == sel.Name {
 			m.clearPrompt()
-			err := m.svc.Store.Delete(sel.Name)
-			m.setStatus(err, "已删除槽位 "+sel.Name, "删除失败")
+			trashName, err := m.svc.Store.DeleteToTrash(sel.Name)
+			if err == nil {
+				m.trashStack = append(m.trashStack, trashName)
+				m.setStatus(nil, "已删除槽位 "+sel.Name+"(移入回收站,退出前可按 z 撤销)", "")
+			} else {
+				m.setStatus(err, "", "删除失败")
+			}
 			return m, func() tea.Msg { return zRefreshMsg{} }
 		}
 		cmd := m.armPrompt(sel.Name, fmt.Sprintf("再按一次 d 删除槽位 %q", sel.Name))
 		return m, cmd
+	case "z", "Z": // 撤销:从回收站恢复最近删除的槽位
+		name, err := m.svc.Store.RestoreLatestFromTrash()
+		if err != nil {
+			m.status = status{3, "没有可撤销的删除"}
+			return m, nil
+		}
+		if n := len(m.trashStack); n > 0 {
+			m.trashStack = m.trashStack[:n-1]
+		}
+		m.status = status{1, "已恢复槽位 " + name}
+		return m, func() tea.Msg { return zRefreshMsg{} }
 	case "n", "N": // 登出:清空本地凭据(自动备份),让 ZCode 回到未登录态
 		if !m.current.Exists {
 			m.status = status{2, "当前没有登录凭据,无需登出"}
@@ -520,9 +545,14 @@ func (m ZcodeModel) updateWaiting(msg tea.Msg) (Manager, tea.Cmd) {
 		return m, tea.Quit
 	case "ctrl+c":
 		m.quit = true
+		_ = m.svc.Store.PurgeTrash()
 		return m, tea.Quit
 	case "q", "Q":
-		return m, m.handleQuitKey()
+		cmd := m.handleQuitKey()
+		if m.quit {
+			_ = m.svc.Store.PurgeTrash()
+		}
+		return m, cmd
 	}
 	return m, nil
 }

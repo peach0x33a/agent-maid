@@ -35,6 +35,7 @@ var aChips = []chip{
 	{"s", "[S]ave 保存"},
 	{"r", "[R]ename 重命名"},
 	{"d", "[D]elete 删除"},
+	{"z", "[Z]ndo 撤销"},
 	{"n", "[N]ew 新建"},
 	{"m", "[M]eta 信息"},
 	{"?", "[?]Help 帮助"},
@@ -50,7 +51,8 @@ type AntigravityModel struct {
 	baseModel
 
 	svc        *antigravity.Service
-	positioned bool // 首次加载数据后已把光标定位到使用中的账号
+	positioned bool     // 首次加载数据后已把光标定位到使用中的账号
+	trashStack []string // 回收站文件名栈(撤销用)
 	slots      []antigravity.Slot
 	cursor     int
 	current    antigravity.CurrentInfo
@@ -66,10 +68,12 @@ type AntigravityModel struct {
 
 // NewAntigravity 创建 Antigravity 管理器。
 func NewAntigravity() AntigravityModel {
+	svc := antigravity.New()
+	_ = svc.Store.PurgeTrash() // 上次会话的回收站:正式删除(每次启动一次)
 	ti := textinput.New()
 	ti.Placeholder = "槽位名,如 work"
 	ti.CharLimit = 64
-	return AntigravityModel{svc: antigravity.New(), input: ti}
+	return AntigravityModel{svc: svc, input: ti}
 }
 
 // Info 实现 Manager。
@@ -204,9 +208,14 @@ func (m AntigravityModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
 	switch key.String() {
 	case "ctrl+c":
 		m.quit = true
+		_ = m.svc.Store.PurgeTrash()
 		return m, tea.Quit
 	case "q", "Q":
-		return m, m.handleQuitKey()
+		cmd := m.handleQuitKey()
+		if m.quit {
+			_ = m.svc.Store.PurgeTrash()
+		}
+		return m, cmd
 	case "esc":
 		return m, backCmd
 	case "left":
@@ -273,12 +282,28 @@ func (m AntigravityModel) dispatch(key string) (Manager, tea.Cmd) {
 		}
 		if m.deleteArm && m.deleteName == sel.Name {
 			m.clearPrompt()
-			err := m.svc.Store.Delete(sel.Name)
-			m.setStatus(err, "已删除槽位 "+sel.Name, "删除失败")
+			trashName, err := m.svc.Store.DeleteToTrash(sel.Name)
+			if err == nil {
+				m.trashStack = append(m.trashStack, trashName)
+				m.setStatus(nil, "已删除槽位 "+sel.Name+"(移入回收站,退出前可按 z 撤销)", "")
+			} else {
+				m.setStatus(err, "", "删除失败")
+			}
 			return m, func() tea.Msg { return aRefreshMsg{} }
 		}
 		cmd := m.armPrompt(sel.Name, fmt.Sprintf("再按一次 d 删除槽位 %q", sel.Name))
 		return m, cmd
+	case "z", "Z": // 撤销:从回收站恢复最近删除的槽位
+		name, err := m.svc.Store.RestoreLatestFromTrash()
+		if err != nil {
+			m.status = status{3, "没有可撤销的删除"}
+			return m, nil
+		}
+		if n := len(m.trashStack); n > 0 {
+			m.trashStack = m.trashStack[:n-1]
+		}
+		m.status = status{1, "已恢复槽位 " + name}
+		return m, func() tea.Msg { return aRefreshMsg{} }
 	case "n", "N": // 登出:清空本地凭据(自动备份),让 Antigravity 回到未登录态
 		if !m.current.Exists {
 			m.status = status{2, "当前没有登录凭据,无需登出"}
