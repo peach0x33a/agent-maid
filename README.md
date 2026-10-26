@@ -40,6 +40,20 @@ GOOS=darwin  GOARCH=arm64 go build -o agent-maid-macos
 GOOS=windows GOARCH=amd64 go build -o agent-maid.exe
 ```
 
+### 预编译产物
+
+打上 `v*` 形式的 tag 并推送后，GitHub Actions 会跑测试、构建
+Linux/macOS 的 amd64+arm64 二进制，并发布到 Releases：
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+下载的文件形如 `agent-maid_1.0.0_linux_amd64`（静态链接，可直接运行），
+每个都附带 `.sha256` 校验和。二进制里的版本号取自 tag，可用
+`agent-maid version` 核对。
+
 ## 快速上手
 
 ```bash

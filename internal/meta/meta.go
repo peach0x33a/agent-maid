@@ -11,10 +11,12 @@ import (
 	"strings"
 )
 
-const (
-	Name    = "agent-maid"
-	Version = "0.1.0"
-)
+const Name = "agent-maid"
+
+// Version 在源码里是开发版号;正式 Release 时由 CI 用
+// -ldflags "-X agent-maid/internal/meta.Version=<tag>" 覆盖,
+// 所以这里必须是 var(常量无法被链接器改写)。
+var Version = "0.1.0"
 
 // Dir is the base config directory: $AGENT_MAID_DIR, then $XDG_CONFIG_HOME,
 // then %AppData% (Windows) / ~/.config (Linux & macOS).

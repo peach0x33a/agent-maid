@@ -1,0 +1,96 @@
+name: Release
+
+# 只在正式打 tag 时触发:tag 形如 v1.2.3 / v1.2.3-rc1。
+# 推送分支不会构建,避免把普通的每次 push 都变成一次发布会。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # 创建 Release 并上传产物需要
+
+env:
+  # 静态链接,产物可直接丢到任意 Linux 发行版运行
+  CGO_ENABLED: "0"
+
+jobs:
+  # 先跑一遍测试:测试不过就不发版,避免发布一个坏二进制
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          # tag 里的 v 去掉后再注入版本号,让 agent-maid version 显示 1.2.3
+          VERSION="${GITHUB_REF_NAME#v}"
+          OUT="agent-maid_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          go build -trimpath \
+            -ldflags "-s -w -X agent-maid/internal/meta.Version=${VERSION}" \
+            -o "$OUT" .
+          # 附带校验和,方便用户下载后核对
+          sha256sum "$OUT" > "$OUT.sha256"
+          ls -l "$OUT" "$OUT.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-maid-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            agent-maid_*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -l artifacts
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          # tag 自带说明时用它,否则自动生成变更列表
+          generate_release_notes: true
+          files: artifacts/*
+          fail_on_unmatched_files: true
