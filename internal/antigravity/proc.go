@@ -1,4 +1,5 @@
-// 进程检测:提示用户 Antigravity 正在运行时切换凭据可能被其回写覆盖。
+// agy 进程检测:agy 运行中时切换凭据可能被其退出前的凭据回写覆盖,
+// 界面据此提示/等待。
 package antigravity
 
 import (
@@ -8,46 +9,34 @@ import (
 	"agent-maid/internal/procscan"
 )
 
-// Proc 一个检测到的 Antigravity 相关进程。
+// Proc 一个检测到的 agy 相关进程。
 type Proc = procscan.Proc
 
-// Procs 返回运行中的 Antigravity 相关进程(排除本工具自身)。
+// Procs 返回运行中的 agy 相关进程(排除本工具自身)。
 func Procs() []Proc {
 	return procscan.Find(isAntigravityProc)
 }
 
-// isAntigravityProc 根据 argv 判断是否 Antigravity 相关进程。
+// isAntigravityProc 按 argv 判断是否 agy 相关进程:主程序名为 agy,
+// 部分安装是 antigravity / antigravity-cli 的软链或副本。
 func isAntigravityProc(argv []string) bool {
 	for _, a := range argv {
 		if strings.Contains(a, "agent-maid") {
 			return false // 本工具自身
 		}
 	}
+	if len(argv) == 0 {
+		return false
+	}
 	base := strings.ToLower(filepath.Base(argv[0]))
-	if base == "antigravity" {
+	switch base {
+	case "agy", "antigravity", "antigravity-cli":
 		return true
 	}
-	return strings.HasPrefix(base, "antigravity-")
+	// agy 的辅助进程/挂载点(antigravity-cli/bin/agentapi 之类)
+	return strings.HasPrefix(base, "antigravity-cli") ||
+		strings.HasPrefix(base, "antigravity-")
 }
 
-// Running 是否有 Antigravity 进程在运行。
+// Running 是否有 agy 进程在运行。
 func Running() bool { return len(Procs()) > 0 }
-
-// LaunchCmd 从运行中的进程里推断适合重新启动 Antigravity 的命令
-// (Electron 主进程没有 --type= 参数);未检测到时返回空串。
-func LaunchCmd() string {
-	for _, p := range Procs() {
-		argv := strings.Fields(p.Cmd)
-		main := true
-		for _, a := range argv[1:] {
-			if strings.HasPrefix(a, "--type=") {
-				main = false
-				break
-			}
-		}
-		if main {
-			return argv[0]
-		}
-	}
-	return ""
-}

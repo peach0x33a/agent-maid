@@ -23,6 +23,9 @@ type SettingsModel struct {
 	height int
 }
 
+// settingsItems 设置项数量(光标取模用)。
+const settingsItems = 3
+
 // NewSettings 创建设置界面(读取当前设置)。
 func NewSettings() SettingsModel { return SettingsModel{} }
 
@@ -40,9 +43,9 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "up", "k":
-			m.cursor = (m.cursor + 3) % 4
+			m.cursor = (m.cursor - 1 + settingsItems) % settingsItems
 		case "down", "j", "tab":
-			m.cursor = (m.cursor + 1) % 4
+			m.cursor = (m.cursor + 1) % settingsItems
 		case "enter", " ":
 			s := meta.LoadSettings()
 			switch m.cursor {
@@ -79,7 +82,7 @@ func (m SettingsModel) View() string {
 	b.WriteString("\n\n")
 	b.WriteString(strings.Join(items, "\n"))
 	b.WriteString("\n\n")
-	b.WriteString(styleDim.Render("纯文本模式:不渲染块状图标与特殊符号,适合不支持这些字符的终端。"))
+	b.WriteString(wrapToWidth("纯文本模式:不渲染块状图标与特殊符号,适合不支持这些字符的终端。", w-4))
 	b.WriteString("\n\n")
 	b.WriteString(styleHelp.Render("↑/↓ 选择 · Enter 切换/执行 · Esc 返回"))
 	return centerScreen(b.String(), w, m.height)

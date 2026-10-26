@@ -1,6 +1,6 @@
-// Google Antigravity 账号槽位切换器。
+// agy(Antigravity CLI)账号槽位切换器。
 // 实现 Manager 接口接入 agent-maid;共享交互由 baseModel 提供,
-// 本文件只包含 Antigravity 自身的数据与动作。
+// 本文件只包含 agy 自身的数据与动作。
 package ui
 
 import (
@@ -15,12 +15,12 @@ import (
 	"agent-maid/internal/antigravity"
 )
 
-// ainfo Antigravity 的展示信息。
+// ainfo agy 的展示信息。
 var ainfo = targetInfo{
 	Key:      "antigravity",
 	Name:     "Antigravity",
-	Desc:     "Google 账号槽位切换",
-	Path:     "~/.gemini/oauth_creds.json",
+	Desc:     "agy CLI 账号切换",
+	Path:     "~/.gemini/antigravity-cli/antigravity-oauth-token",
 	pxLarge:  antigravityPxLarge,
 	pxSmall:  antigravityPxSmall,
 	colLarge: antigravityColLarge,
@@ -29,16 +29,16 @@ var ainfo = targetInfo{
 	accent:   lipgloss.Color("#3087FE"),
 }
 
-// aChips Antigravity 界面底部操作栏(与其他工具同一套交互模式)。
+// aChips agy 界面底部操作栏(与其他工具同一套交互模式)。
 var aChips = []chip{
 	{"enter", "[↵] 切换"},
-	{"s", "[S]ave 保存"},
-	{"r", "[R]ename 重命名"},
-	{"d", "[D]elete 删除"},
-	{"z", "[Z]ndo 撤销"},
-	{"n", "[N]ew 新建"},
-	{"m", "[M]eta 信息"},
-	{"?", "[?]Help 帮助"},
+	{"s", "[S] 保存"},
+	{"r", "[R] 重命名"},
+	{"d", "[D] 删除"},
+	{"z", "[Z] 撤销"},
+	{"n", "[N] 登出"},
+	{"m", "[M] 信息"},
+	{"?", "[?] 帮助"},
 }
 
 type aconfirm int
@@ -66,7 +66,7 @@ type AntigravityModel struct {
 	confirmTx string
 }
 
-// NewAntigravity 创建 Antigravity 管理器。
+// NewAntigravity 创建 agy 管理器。
 func NewAntigravity() AntigravityModel {
 	svc := antigravity.New()
 	_ = svc.Store.PurgeTrash() // 上次会话的回收站:正式删除(每次启动一次)
@@ -114,7 +114,7 @@ func (m *AntigravityModel) applyLoaded(lm aLoadedMsg) {
 		m.positioned = true
 		if m.current.Exists {
 			for i := range m.slots {
-				if antigravity.EqualCreds(m.current.Creds, m.slots[i].OAuthCreds) {
+				if antigravity.EqualToken(m.current.Token, m.slots[i].Token) {
 					m.cursor = i
 					break
 				}
@@ -157,7 +157,7 @@ func (m AntigravityModel) defaultSlotName() string {
 func (m AntigravityModel) Update(msg tea.Msg) (Manager, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
+		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case aRefreshMsg:
 		return m, m.refresh
@@ -177,7 +177,10 @@ func (m AntigravityModel) Update(msg tea.Msg) (Manager, tea.Cmd) {
 	case modeConfirm:
 		return m.updateConfirm(msg)
 	case modeHelp, modeMachine:
-		if _, ok := msg.(tea.KeyMsg); ok {
+		if key, ok := msg.(tea.KeyMsg); ok {
+			if m.scrollPanel(key.String(), m.panelContent(), aChips) {
+				return m, nil
+			}
 			m.mode = modeNormal
 		}
 		return m, nil
@@ -189,15 +192,18 @@ func (m AntigravityModel) handleApplyResult(msg aApplyResultMsg) (Manager, tea.C
 	m.mode = modeNormal
 	switch {
 	case msg.err != nil:
-		m.status = status{2, msg.err.Error()}
+		m.status = status{statusErr, msg.err.Error()}
 	default:
-		text := "已切换到槽位 " + msg.name
-		if msg.backup != "" {
-			text += "(原账号已自动备份到 " + msg.backup + ")"
-		}
-		m.status = status{1, text}
+		m.status = status{statusOK, describeApply(msg.name, msg.backup)}
 	}
 	return m, func() tea.Msg { return aRefreshMsg{} }
+}
+
+// reload 同步重新读盘(当前账号/槽位/运行状态)。
+func (m *AntigravityModel) reload() {
+	if lm, ok := m.refresh().(aLoadedMsg); ok {
+		m.applyLoaded(lm)
+	}
 }
 
 func (m AntigravityModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
@@ -218,6 +224,11 @@ func (m AntigravityModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
 		return m, cmd
 	case "esc":
 		return m, backCmd
+	case "ctrl+r":
+		m.clearPrompt()
+		m.reload()
+		m.status = status{statusOK, "已重新读取当前账号与槽位"}
+		return m, nil
 	case "left":
 		m.chipNav(-1, len(aChips))
 		return m, nil
@@ -252,8 +263,10 @@ func (m AntigravityModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
 func (m AntigravityModel) dispatch(key string) (Manager, tea.Cmd) {
 	switch key {
 	case "s", "S": // 保存当前账号
+		// agy 可能在 TUI 开着时刚登录/刚退出登录:先同步读盘再判断
+		m.reload()
 		if !m.current.Exists {
-			m.status = status{2, "没有找到 oauth_creds.json,无账号可保存"}
+			m.status = status{statusErr, "没有找到 agy 登录凭据,请先在 agy 里登录"}
 			return m, nil
 		}
 		m.clearPrompt()
@@ -296,52 +309,52 @@ func (m AntigravityModel) dispatch(key string) (Manager, tea.Cmd) {
 	case "z", "Z": // 撤销:从回收站恢复最近删除的槽位
 		name, err := m.svc.Store.RestoreLatestFromTrash()
 		if err != nil {
-			m.status = status{3, "没有可撤销的删除"}
+			m.status = status{statusWarn, "没有可撤销的删除"}
 			return m, nil
 		}
 		if n := len(m.trashStack); n > 0 {
 			m.trashStack = m.trashStack[:n-1]
 		}
-		m.status = status{1, "已恢复槽位 " + name}
+		m.status = status{statusOK, "已恢复槽位 " + name}
 		return m, func() tea.Msg { return aRefreshMsg{} }
-	case "n", "N": // 登出:清空本地凭据(自动备份),让 Antigravity 回到未登录态
+	case "n", "N": // 登出:清空 agy 登录凭据(自动备份),用于换账号重新登录
 		if !m.current.Exists {
-			m.status = status{2, "当前没有登录凭据,无需登出"}
+			m.status = status{statusErr, "当前没有登录凭据,无需登出"}
 			return m, nil
 		}
 		if m.deleteArm && m.deleteName == "N" {
 			m.clearPrompt()
 			backup, err := m.svc.BackupCurrentIfUncovered()
 			if err != nil {
-				m.status = status{2, "自动备份失败: " + err.Error()}
+				m.status = status{statusErr, "自动备份失败: " + err.Error()}
 				return m, nil
 			}
-			if err := antigravity.ClearCreds(); err != nil {
-				m.status = status{2, "清空凭据失败: " + err.Error()}
+			if err := antigravity.ClearToken(); err != nil {
+				m.status = status{statusErr, "清空凭据失败: " + err.Error()}
 				return m, nil
 			}
-			text := "已清空本地凭据,可重新登录后按 s 保存新账号"
+			text := "已登出 agy,可在 agy 里登录新账号后按 s 保存"
 			if backup != "" {
-				text = "已清空本地凭据(原账号已自动备份到 " + backup + "),可重新登录后按 s 保存"
+				text = "已登出 agy(原账号已自动备份到 " + backup + "),可登录新账号后按 s 保存"
 			}
-			m.status = status{1, text}
+			m.status = status{statusOK, text}
 			return m, func() tea.Msg { return aRefreshMsg{} }
 		}
 		var text string
 		if m.svc.CurrentCovered() {
-			text = "再按一次 N 清空凭据并登出(当前账号已保存在槽位,令牌不会被吊销)"
+			text = "再按一次 N 登出 agy(当前账号已保存在槽位,服务端会话不会被吊销)"
 		} else {
-			text = "⚠ 当前凭据尚未保存到槽位,再按一次 N 登出(将自动备份到 auto-<时间戳> 槽位)"
+			text = "⚠ 当前账号尚未保存到槽位,再按一次 N 登出(将自动备份到 auto-<时间戳> 槽位)"
 		}
 		cmd := m.armPrompt("N", text)
 		return m, cmd
 	case "m", "M":
 		m.clearPrompt()
-		m.mode = modeMachine
+		m.openPanel(modeMachine)
 	case "?", "h":
 		m.clearPrompt()
-		m.mode = modeHelp
-	case "enter": // 切换:再按一次 Enter 确认(提示在徽章位置)
+		m.openPanel(modeHelp)
+	case "enter": // 切换:再按一次 Enter 确认
 		sel := m.selected()
 		if sel == nil {
 			return m, nil
@@ -392,12 +405,12 @@ func (m AntigravityModel) updateInput(msg tea.Msg) (Manager, tea.Cmd) {
 				err = m.svc.Store.Rename(m.renameFrom, name)
 			}
 			if err == nil {
-				m.status = status{1, orDefault(extra, "操作成功")}
+				m.status = status{statusOK, orDefault(extra, "操作成功")}
 				m.mode = modeNormal
 				m.input.Blur()
 				return m, func() tea.Msg { return aRefreshMsg{} }
 			}
-			m.status = status{2, err.Error()}
+			m.status = status{statusErr, err.Error()}
 			return m, nil
 		}
 	}
@@ -445,21 +458,61 @@ func describeApply(name, backup string) string {
 	return text
 }
 
+// expiryMark 凭据时效的展示文本;没过期且能自动续期时为普通说明。
+func expiryMark(state antigravity.TokenState, now time.Time) string {
+	switch {
+	case state.ExpiresAt == nil:
+		if state.Refreshable {
+			return "可自动续期"
+		}
+		return "过期时间未知"
+	case state.Expired(now):
+		if state.Refreshable {
+			return "access_token 已过期(agy 会自动续期)"
+		}
+		return "已过期,需重新登录"
+	default:
+		return "有效期至 " + state.ExpiresAt.Local().Format("01-02 15:04")
+	}
+}
+
+// slotWarn 槽位在列表里的告警标记。
+func slotWarn(slot antigravity.Slot, now time.Time) string {
+	if slot.State.Expired(now) && !slot.State.Refreshable {
+		return styleWarn.Render(" ⚠已过期")
+	}
+	return ""
+}
+
 // ───────────────────────── 视图 ─────────────────────────
 
 func (m AntigravityModel) currentLine() string {
 	if !m.current.Exists {
-		return styleWarn.Render("当前账号:未找到 oauth_creds.json(尚未登录 Google 账号)")
+		line := styleWarn.Render("当前账号:未登录 agy(没有找到凭据文件)")
+		if m.current.LoggedOut != "" {
+			line += styleDim.Render("  · 上次登出的凭据仍保留在同一目录")
+		}
+		return line
 	}
-	line := "当前账号:" + stylePlainName.Render(orDefault(m.current.Email, "(未知)"))
+	line := "当前账号:" + stylePlainName.Render(orDefault(m.current.Email, "(未知邮箱)"))
+	if m.current.AuthMode != "" {
+		line += styleDim.Render("[" + m.current.AuthMode + "]")
+	}
+	now := time.Now()
+	if m.current.State.Expired(now) && !m.current.State.Refreshable {
+		line += styleWarn.Render("  ⚠凭据已过期且无 refresh_token,需在 agy 重新登录")
+	}
 	return line
 }
 
-// slotTable 渲染槽位列表表格(表头 + 动态列宽)。
+// slotTable 渲染槽位列表表格(表头 + 动态列宽,超出可视高度时滚动)。
 func (m AntigravityModel) slotTable() string {
 	rows := [][]string{{"  槽位", "邮箱", "最后使用", "状态"}}
-	for i, slot := range m.slots {
-		inUse := m.current.Exists && antigravity.EqualCreds(m.current.Creds, slot.OAuthCreds)
+	start, end := m.windowRange(len(m.slots), m.cursor)
+	now := time.Now()
+	for i := start; i < end; i++ {
+		slot := m.slots[i]
+		inUse := m.current.Exists && antigravity.EqualToken(m.current.Token, slot.Token)
 
 		cursor := "  "
 		nameStyle := stylePlainName
@@ -480,6 +533,13 @@ func (m AntigravityModel) slotTable() string {
 		if inUse {
 			mark = badgeInUse()
 		}
+		if slot.AuthMode != "" && slot.AuthMode != "consumer" {
+			mark += styleDim.Render(" " + slot.AuthMode)
+		}
+		if !slot.State.Refreshable {
+			mark += styleWarn.Render(" ⚠无refresh_token")
+		}
+		mark += slotWarn(slot, now)
 
 		rows = append(rows, []string{
 			cursor + nameStyle.Render(name),
@@ -491,7 +551,25 @@ func (m AntigravityModel) slotTable() string {
 	for i, cell := range rows[0] {
 		rows[0][i] = styleDim.Render(cell)
 	}
-	return joinTable(rows)
+	table := fitTable(rows, m.tableWidth(), []int{2, 1})
+	if start > 0 {
+		table = styleDim.Render(fmt.Sprintf("↑ 上方还有 %d 个", start)) + "\n" + table
+	}
+	if end < len(m.slots) {
+		table += "\n" + styleDim.Render(fmt.Sprintf("↓ 下方还有 %d 个", len(m.slots)-end))
+	}
+	return table
+}
+
+// panelContent 当前浮层的正文(滚动窗口用,需与 View 里的内容一致)。
+func (m AntigravityModel) panelContent() string {
+	switch m.mode {
+	case modeHelp:
+		return aHelpView(m.helpWidth())
+	case modeMachine:
+		return aInfoView(m)
+	}
+	return ""
 }
 
 func (m AntigravityModel) View() string {
@@ -503,7 +581,7 @@ func (m AntigravityModel) View() string {
 		w = 80
 	}
 
-	rowsBlock := "(空)按 s 保存当前 Google 账号,或 S 快速保存"
+	rowsBlock := "(空)按 s 保存当前 agy 账号到槽位"
 	if len(m.slots) > 0 {
 		rowsBlock = "\n" + m.slotTable()
 	}
@@ -515,38 +593,40 @@ func (m AntigravityModel) View() string {
 	var body strings.Builder
 	body.WriteString(m.currentLine() + "\n")
 	if m.agRun {
-		body.WriteString(styleWarn.Render("⚠ Antigravity 正在运行:切换后建议尽快重启 Antigravity,避免运行中的凭据回写覆盖") + "\n")
+		body.WriteString(styleWarn.Render("⚠ agy 正在运行:切换后建议尽快重启 agy,避免运行中的凭据回写覆盖") + "\n")
 	}
 	body.WriteString(styleDim.Render(fmt.Sprintf("槽位(共 %d 个)", len(m.slots))) + "\n")
 	body.WriteString(ruleW(bodyW, "238") + "\n")
 	body.WriteString(rowsBlock + "\n\n")
 	body.WriteString(m.renderStatus() + "\n")
 
+	overlay := ""
 	switch m.mode {
 	case modeInput:
 		purpose := "输入槽位名保存当前账号"
 		if m.inputFor == inputRename {
 			purpose = "重命名槽位 " + m.renameFrom
 		}
-		body.WriteString("\n" + styleBox.Render(purpose+"\n"+m.input.View()) + "\n")
+		overlay = purpose + "\n" + m.input.View()
 	case modeConfirm:
 		var text, keys string
 		switch m.confirm {
 		case aconfirmOverwriteSave:
-			text = fmt.Sprintf("槽位 %q 已存在,覆盖?", m.confirmTx)
+			text = fmt.Sprintf("槽位 %q 已存在,用当前账号覆盖?", m.confirmTx) + "\n" +
+				styleDim.Render("覆盖后原槽位内容不再保留(其他槽位不受影响)")
 			keys = "[y] 确认  [n] 取消"
 		}
-		body.WriteString(m.confirmBox(text, keys))
+		overlay = styleWarn.Render(text) + "\n" + shakePrefix(m.shakeFrame) + keys
 	case modeHelp:
-		body.WriteString("\n" + styleBox.Render(aHelpView()) + "\n")
+		overlay = aHelpView(m.helpWidth())
 	case modeMachine:
-		body.WriteString("\n" + styleBox.Render(aInfoView(m)) + "\n")
+		overlay = aInfoView(m)
+	}
+	if overlay != "" && m.panelOverflow(overlay, aChips) {
+		overlay += "\n\n" + styleDim.Render("(↑/↓ 滚动,其他键返回)")
 	}
 
-	footer := m.bottomBar(&ainfo, aChips)
-	return m.header(&ainfo) + "\n" +
-		centerBlock(body.String(), w) + "\n" +
-		centerBlock(footer, w)
+	return m.page(&ainfo, body.String(), overlay, aChips)
 }
 
 func aInfoView(m AntigravityModel) string {
@@ -556,38 +636,51 @@ func aInfoView(m AntigravityModel) string {
 	if antigravity.Running() {
 		run = accentSt.Render("正在运行")
 	}
-	return strings.Join([]string{
+	current := styleDim.Render("(未登录)")
+	if m.current.Exists {
+		rows := []string{accentSt.Render(orDefault(m.current.Email, "(未知邮箱)"))}
+		if m.current.AuthMode != "" {
+			rows = append(rows, styleDim.Render("认证方式 "+m.current.AuthMode))
+		}
+		rows = append(rows, styleDim.Render(expiryMark(m.current.State, time.Now())))
+		current = strings.Join(rows, "\n")
+	}
+	lines := []string{
 		styleTitle.Render("信息"),
-		styleDim.Render("数据目录:    ") + val.Render(antigravity.GeminiDir()),
-		styleDim.Render("凭据文件:    ") + val.Render(antigravity.OAuthCredsPath()),
-		styleDim.Render("账号文件:    ") + val.Render(antigravity.AccountsPath()),
-		styleDim.Render("当前账号:    ") + val.Render(orDefault(m.current.Email, "(未登录)")),
-		styleDim.Render("Antigravity: ") + run,
-		styleDim.Render("槽位:        ") + val.Render(antigravity.DefaultDir()) +
+		styleDim.Render("agy 数据目录: ") + val.Render(antigravity.CLIDir()),
+		styleDim.Render("登录凭据:     ") + val.Render(antigravity.TokenPath()),
+	}
+	parts := strings.Split(current, "\n")
+	lines = append(lines, styleDim.Render("当前账号:     ")+parts[0])
+	for _, extra := range parts[1:] {
+		lines = append(lines, strings.Repeat(" ", len("当前账号:     "))+extra)
+	}
+	lines = append(lines,
+		styleDim.Render("agy:          ")+run,
+		styleDim.Render("槽位:         ")+val.Render(antigravity.DefaultDir())+
 			accentSt.Render(fmt.Sprintf("  %d 个", len(m.slots))),
 		"",
 		styleDim.Render("按任意键返回"),
-	}, "\n")
+	)
+	return strings.Join(lines, "\n")
 }
 
-func aHelpView() string {
-	return strings.Join([]string{
-		styleTitle.Render("按键说明(Antigravity 账号切换器)"),
-		"j/k 或 ↑/↓   移动光标",
-		"←/→          在底部操作栏中选择操作,回车执行",
-		"enter        切换到选中槽位(再按一次 Enter 确认;自动备份未覆盖的当前账号,按偏好自动重启)",
-		"s            保存当前账号到新槽位(默认填充邮箱前缀,可编辑)",
-		"S            快速保存当前账号(自动命名)",
-		"r            重命名选中槽位",
-		"d            删除选中槽位(按两次 d 确认,5s 不动自动撤下)",
-		"m            查看数据目录/账号信息",
-		"?            本帮助",
-		"Esc          返回目标软件选择",
-		"q / Q / Ctrl+C 退出",
-		"",
+func aHelpView(width int) string {
+	return renderHelp("按键说明(agy 账号切换器)", []helpEntry{
+		{"j/k 或 ↑/↓", "移动光标"},
+		{"←/→", "在底部操作栏中选择操作,回车执行"},
+		{"enter", "切换到选中槽位(再按一次 Enter 确认;未保存的当前账号会自动备份)"},
+		{"s", "保存当前 agy 账号到新槽位(默认填充邮箱前缀,可编辑)"},
+		{"r", "重命名选中槽位"},
+		{"d", "删除选中槽位(按两次 d 确认,移入回收站)"},
+		{"z", "撤销最近一次删除"},
+		{"n", "登出 agy(当前账号自动备份),用于换账号重新登录"},
+		{"m", "查看 agy 目录/凭据/账号信息"},
+		{"?", "本帮助"},
+		{"Esc", "返回目标软件选择"},
+		{"q / Q / Ctrl+C", "退出"},
+	}, []string{
 		styleDim.Render("槽位存储位置:" + antigravity.DefaultDir()),
-		styleDim.Render("凭据文件:" + antigravity.OAuthCredsPath()),
-		"",
-		styleDim.Render("按任意键返回"),
-	}, "\n")
+		styleDim.Render("agy 凭据文件:" + antigravity.TokenPath()),
+	}, width)
 }

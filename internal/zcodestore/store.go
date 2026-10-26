@@ -235,7 +235,7 @@ func (s *Store) Delete(name string) error {
 	return nil
 }
 
-// Rename 重命名槽位。
+// Rename 重命名槽位。同名视为无操作;目标名已被占用时报错而不是覆盖。
 func (s *Store) Rename(oldName, newName string) error {
 	cleanOld, err := SanitizeName(oldName)
 	if err != nil {
@@ -244,6 +244,16 @@ func (s *Store) Rename(oldName, newName string) error {
 	cleanNew, err := SanitizeName(newName)
 	if err != nil {
 		return err
+	}
+	if cleanOld == cleanNew {
+		// 同名重命名:不落盘也不删除,否则会把刚保存的槽位删掉
+		if _, err := s.Get(cleanOld); err != nil {
+			return err
+		}
+		return nil
+	}
+	if _, err := os.Stat(s.slotPath(cleanNew)); err == nil {
+		return fmt.Errorf("槽位 %q 已存在", cleanNew)
 	}
 	slot, err := s.Get(cleanOld)
 	if err != nil {

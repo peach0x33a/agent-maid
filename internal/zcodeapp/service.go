@@ -62,10 +62,36 @@ func (s *Service) SaveCurrent(name string, allowOverwrite bool) (zcodestore.Slot
 	return saved, nil
 }
 
+// ApplyOptions 控制切换行为。
+type ApplyOptions struct {
+	// RequireSaved 为 true 时,当前凭据未被任何槽位覆盖则拒绝切换,
+	// 而不是自动备份。CLI 默认这么做:auto-<时间戳> 槽位事后没人认得出
+	// 是谁,让调用方先显式 save 更可靠。
+	RequireSaved bool
+}
+
+// UnsavedCurrentError 当前账号尚未保存到槽位,切换会造成"没人认得"的备份。
+type UnsavedCurrentError struct {
+	Account string // 当前账号的展示标签,可能为空
+}
+
+func (e *UnsavedCurrentError) Error() string {
+	who := "当前账号"
+	if e.Account != "" {
+		who = "当前账号 " + e.Account + " "
+	}
+	return who + "尚未保存到槽位"
+}
+
 // Apply 将槽位内容写回 credentials.json。
 // 若当前凭据未被任何槽位覆盖,先自动备份到 auto-<时间戳> 槽位,避免数据丢失。
 // 返回自动备份的槽位名(未发生则为空)。
-func (s *Service) Apply(name string) (autoBackup string, err error) {
+func (s *Service) Apply(name string) (string, error) {
+	return s.ApplyWith(name, ApplyOptions{})
+}
+
+// ApplyWith 带选项的 Apply。
+func (s *Service) ApplyWith(name string, opts ApplyOptions) (autoBackup string, err error) {
 	slot, err := s.Store.Get(name)
 	if err != nil {
 		return "", fmt.Errorf("读取槽位 %q 失败: %w", name, err)
@@ -81,6 +107,9 @@ func (s *Service) Apply(name string) (autoBackup string, err error) {
 			return "", nil
 		}
 		if !s.currentCovered(current) {
+			if opts.RequireSaved {
+				return "", &UnsavedCurrentError{Account: describeAccount(current.ExtractMeta(zcode.DeriveKey(zcode.CredentialSecret())))}
+			}
 			backupName := fmt.Sprintf("auto-%s", time.Now().Format("0102-150405"))
 			key := zcode.DeriveKey(zcode.CredentialSecret())
 			backup := zcodestore.Slot{
@@ -148,4 +177,27 @@ func (s *Service) currentCovered(current zcode.Credentials) bool {
 		}
 	}
 	return false
+}
+
+// describeAccount 把账号摘要拼成展示标签(provider / 用户名)。
+func describeAccount(meta zcode.AccountMeta) string {
+	parts := make([]string, 0, 2)
+	if meta.Provider != "" {
+		parts = append(parts, meta.Provider)
+	}
+	name := meta.DisplayName
+	if name == "" {
+		name = meta.Username
+	}
+	if name != "" {
+		parts = append(parts, name)
+	}
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += " / "
+		}
+		out += p
+	}
+	return out
 }

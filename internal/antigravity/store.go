@@ -1,5 +1,5 @@
-// Antigravity 账号槽位存储:每个槽位是 slots/ 下一个 JSON 文件,
-// 快照当时的 oauth_creds.json 与 google_accounts.json 原文 + 邮箱标签。
+// agy 账号槽位存储:每个槽位是 slots/ 下一个 JSON 文件,
+// 快照当时的 antigravity-oauth-token 原文 + 邮箱标签。
 package antigravity
 
 import (
@@ -23,9 +23,12 @@ type Slot struct {
 	CreatedAt  time.Time  `json:"createdAt"`
 	UpdatedAt  time.Time  `json:"updatedAt"`
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"` // 最近一次切换启用的时间
-	Email      string     `json:"email"`                // 展示标签(来自 id_token/active)
-	OAuthCreds Creds      `json:"oauthCreds"`
-	Accounts   Accounts   `json:"googleAccounts"`
+	Email      string     `json:"email"`                // 展示标签(来自 id_token_email)
+	AuthMode   string     `json:"authMethod,omitempty"` // consumer / enterprise
+	Token      Token      `json:"token"`                // agy 凭据文件原文
+
+	// State 由凭据内容派生,不落盘(保存/读取后填充,供界面展示)
+	State TokenState `json:"-"`
 }
 
 // Store 槽位存储,每槽位一个文件。
@@ -128,6 +131,13 @@ func (s *Store) Save(name string, slot Slot) (Slot, error) {
 	if slot.CreatedAt.IsZero() {
 		slot.CreatedAt = now
 	}
+	if slot.Email == "" {
+		slot.Email = TokenEmail(slot.Token)
+	}
+	if slot.AuthMode == "" {
+		slot.AuthMode = TokenAuthMethod(slot.Token)
+	}
+	slot.State = TokenStateOf(slot.Token)
 	data, err := json.MarshalIndent(slot, "", "  ")
 	if err != nil {
 		return Slot{}, err
@@ -218,16 +228,35 @@ func (s *Store) Delete(name string) error {
 	return os.Remove(path)
 }
 
-// Rename 重命名槽位。
+// Rename 重命名槽位。同名视为无操作;目标名已被占用时报错而不是覆盖。
 func (s *Store) Rename(oldName, newName string) error {
-	slot, err := s.Get(oldName)
+	cleanOld, err := SanitizeName(oldName)
 	if err != nil {
 		return err
 	}
-	if _, err := s.Save(newName, slot); err != nil {
+	cleanNew, err := SanitizeName(newName)
+	if err != nil {
 		return err
 	}
-	return s.Delete(oldName)
+	if cleanOld == cleanNew {
+		// 同名重命名:不落盘也不删除,否则会把刚保存的槽位删掉
+		if _, err := s.Get(cleanOld); err != nil {
+			return err
+		}
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(s.slotsDir(), cleanNew+".json")); err == nil {
+		return fmt.Errorf("槽位 %q 已存在", cleanNew)
+	}
+	slot, err := s.Get(cleanOld)
+	if err != nil {
+		return err
+	}
+	slot.Name = cleanNew
+	if _, err := s.Save(cleanNew, slot); err != nil {
+		return err
+	}
+	return s.Delete(cleanOld)
 }
 
 func (s *Store) load(path string) (Slot, error) {
@@ -239,5 +268,6 @@ func (s *Store) load(path string) (Slot, error) {
 	if err := json.Unmarshal(data, &slot); err != nil {
 		return Slot{}, fmt.Errorf("%s 解析失败: %w", filepath.Base(path), err)
 	}
+	slot.State = TokenStateOf(slot.Token)
 	return slot, nil
 }

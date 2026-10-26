@@ -99,7 +99,7 @@ func (m SelectModel) View() string {
 
 	// 纯文本模式:垂直居中菜单(无图标,一行一个工具,三列对齐)
 	var inner string
-	if plainMode {
+	if plainMode || h < 20 {
 		inner = m.plainMenu()
 	} else {
 		// 轮播布局:选中项恒居中(大图),两侧是上一项/下一项(小图,缩小 20%,
@@ -139,6 +139,11 @@ func (m SelectModel) View() string {
 		boxStyle = boxStyle.Align(lipgloss.Center) // 纯文本菜单各行宽度不同,逐行居中会错位
 	}
 	box := boxStyle.Render(inner)
+	// 图标高度固定,窄矮终端里外框本身可能高于屏幕;此时退化为纯文本菜单,
+	// 保证首屏标题与操作提示不被顶出可视区。
+	if h > 0 && strings.Count(box, "\n")+1 > h-6 {
+		box = boxStyle.Render(m.plainMenu())
+	}
 
 	hint := "←/→ 或 Tab 选择"
 	if n := len(m.infos); n > 1 {

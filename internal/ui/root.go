@@ -84,9 +84,17 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// 全局消息:向导完成 / 选择完成 / 返回首屏
 	switch msg := msg.(type) {
 	case wizardDoneMsg:
-		_ = meta.SaveSettings(msg.settings)
-		plainMode = msg.settings.Plain
-		noAnim = msg.settings.NoAnim
+		// 向导只负责 SetupDone/Truecolor/Symbols/Plain,其余偏好(动画、上次目标)
+		// 从现有设置继承,重跑向导不会把用户已有设置清掉。
+		merged := meta.LoadSettings()
+		merged.SetupDone = true
+		merged.Truecolor = msg.settings.Truecolor
+		merged.Symbols = msg.settings.Symbols
+		merged.Plain = msg.settings.Plain
+		_ = meta.SaveSettings(merged)
+		plainMode = merged.Plain
+		noAnim = merged.NoAnim
+
 		if m.pre != "" {
 			for _, mgr := range m.registry {
 				if mgr.Info().Key == m.pre {

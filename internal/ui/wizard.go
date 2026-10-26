@@ -17,11 +17,10 @@ type wizardDoneMsg struct{ settings meta.Settings }
 
 // WizardModel 设置向导。
 type WizardModel struct {
-	step      int // 0 渐变色 1 特殊符号 2 自动重启
+	step      int // 0 渐变色 1 特殊符号
 	width     int
 	height    int
 	gradOK    bool
-	relaunch  bool
 	symBroken bool
 }
 
@@ -47,10 +46,10 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "esc":
-			// 跳过向导:视为全部支持
-			return m, func() tea.Msg {
-				return wizardDoneMsg{settings: meta.Settings{SetupDone: true, Truecolor: true, Symbols: true}}
-			}
+			// 跳过向导:保留已有设置,只标记为已完成
+			cur := meta.LoadSettings()
+			cur.SetupDone = true
+			return m, func() tea.Msg { return wizardDoneMsg{settings: cur} }
 		}
 		if m.step == 0 {
 			switch msg.String() {

@@ -19,8 +19,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"agent-maid/internal/gptapp"
 	"agent-maid/internal/gptauth"
-	"agent-maid/internal/gptsession"
 	"agent-maid/internal/gptstore"
 )
 
@@ -41,14 +41,14 @@ var cinfo = targetInfo{
 // cChips ChatGPT 界面底部操作栏(与 ZCode 界面同一套交互模式)。
 var cChips = []chip{
 	{"enter", "[↵] 切换"},
-	{"s", "[S]ave 保存"},
-	{"i", "[I]mport 导入"},
-	{"r", "[R]ename 重命名"},
-	{"d", "[D]elete 删除"},
-	{"z", "[Z]ndo 撤销"},
-	{"n", "[N]ew 新建"},
-	{"m", "[M]eta 信息"},
-	{"?", "[?]Help 帮助"},
+	{"s", "[S] 保存"},
+	{"i", "[I] 导入"},
+	{"r", "[R] 重命名"},
+	{"d", "[D] 删除"},
+	{"z", "[Z] 撤销"},
+	{"n", "[N] 登出"},
+	{"m", "[M] 信息"},
+	{"?", "[?] 帮助"},
 }
 
 type ChatgptModel struct {
@@ -152,7 +152,7 @@ type cRefreshMsg struct{}
 func (m ChatgptModel) Update(msg tea.Msg) (Manager, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
+		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 	case cRefreshMsg:
 		return m, m.refresh
@@ -169,12 +169,22 @@ func (m ChatgptModel) Update(msg tea.Msg) (Manager, tea.Cmd) {
 	case modeInput:
 		return m.updateInput(msg)
 	case modeHelp, modeDetail, modeMachine:
-		if _, ok := msg.(tea.KeyMsg); ok {
+		if key, ok := msg.(tea.KeyMsg); ok {
+			if m.scrollPanel(key.String(), m.panelContent(), cChips) {
+				return m, nil
+			}
 			m.mode = modeNormal
 		}
 		return m, nil
 	}
 	return m.updateNormal(msg)
+}
+
+// reload 同步重新读盘(当前凭据/账号库/运行状态)。
+func (m *ChatgptModel) reload() {
+	if lm, ok := m.refresh().(cLoadedMsg); ok {
+		m.applyLoaded(lm)
+	}
 }
 
 func (m ChatgptModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
@@ -195,6 +205,11 @@ func (m ChatgptModel) updateNormal(msg tea.Msg) (Manager, tea.Cmd) {
 		return m, cmd
 	case "esc":
 		return m, backCmd
+	case "ctrl+r":
+		m.clearPrompt()
+		m.reload()
+		m.status = status{statusOK, "已重新读取当前凭据与账号库"}
+		return m, nil
 	case "left":
 		m.chipNav(-1, len(cChips))
 		return m, nil
@@ -236,6 +251,7 @@ func (m ChatgptModel) dispatch(key string) (Manager, tea.Cmd) {
 		m.input.Focus()
 		return m, textinput.Blink
 	case "s", "S": // 保存当前凭据到账号库(输入显示名)
+		m.reload() // 官方端可能刚登录/续期过,先读最新 auth.json
 		m.clearPrompt()
 		m.mode = modeInput
 		m.inputFor = inputGSave
@@ -264,7 +280,7 @@ func (m ChatgptModel) dispatch(key string) (Manager, tea.Cmd) {
 			m.clearPrompt()
 			st, lerr := gptstore.Load(gptstore.DefaultPath())
 			if lerr != nil {
-				m.status = status{2, "读取账号库失败: " + lerr.Error()}
+				m.status = status{statusErr, "读取账号库失败: " + lerr.Error()}
 				return m, nil
 			}
 			trashName, err := st.DeleteToTrash(sel.ID)
@@ -281,35 +297,35 @@ func (m ChatgptModel) dispatch(key string) (Manager, tea.Cmd) {
 	case "z", "Z": // 撤销:从回收站恢复最近删除的账号
 		st, lerr := gptstore.Load(gptstore.DefaultPath())
 		if lerr != nil {
-			m.status = status{2, "读取账号库失败: " + lerr.Error()}
+			m.status = status{statusErr, "读取账号库失败: " + lerr.Error()}
 			return m, nil
 		}
 		name, err := st.RestoreLatestFromTrash()
 		if err != nil {
-			m.status = status{3, "没有可撤销的删除"}
+			m.status = status{statusWarn, "没有可撤销的删除"}
 			return m, nil
 		}
 		if n := len(m.trashStack); n > 0 {
 			m.trashStack = m.trashStack[:n-1]
 		}
-		m.status = status{1, "已恢复账号 " + name}
+		m.status = status{statusOK, "已恢复账号 " + name}
 		return m, func() tea.Msg { return cRefreshMsg{} }
 	case "n", "N": // 登出:清空本地 auth.json(账号保留在账号库)
 		if m.current == nil {
-			m.status = status{2, "当前未登录,无需登出"}
+			m.status = status{statusErr, "当前未登录,无需登出"}
 			return m, nil
 		}
 		if m.deleteArm && m.deleteName == "N" {
 			m.clearPrompt()
 			if _, err := m.saveCurrent(""); err != nil {
-				m.status = status{2, "保存当前凭据失败: " + err.Error()}
+				m.status = status{statusErr, "保存当前凭据失败: " + err.Error()}
 				return m, nil
 			}
 			if err := gptauth.ClearAuthFile(m.home); err != nil {
-				m.status = status{2, "清空凭据失败: " + err.Error()}
+				m.status = status{statusErr, "清空凭据失败: " + err.Error()}
 				return m, nil
 			}
-			m.status = status{1, "已登出 Codex(账号已保留在账号库),重新登录后按 s 保存"}
+			m.status = status{statusOK, "已登出 Codex(账号已保留在账号库),重新登录后按 s 保存"}
 			return m, func() tea.Msg { return cRefreshMsg{} }
 		}
 		var text string
@@ -322,10 +338,10 @@ func (m ChatgptModel) dispatch(key string) (Manager, tea.Cmd) {
 		return m, cmd
 	case "m", "M":
 		m.clearPrompt()
-		m.mode = modeMachine
+		m.openPanel(modeMachine)
 	case "?", "h":
 		m.clearPrompt()
-		m.mode = modeHelp
+		m.openPanel(modeHelp)
 	case "enter": // 激活:再按一次 Enter 确认(提示在徽章位置)
 		sel := m.selected()
 		if sel == nil {
@@ -411,87 +427,21 @@ func (m ChatgptModel) updateInput(msg tea.Msg) (Manager, tea.Cmd) {
 // saveCurrent 把官方 auth.json 里当前生效的凭据存入账号库。
 // label 为空时用 email / account_id 自动命名。
 func (m *ChatgptModel) saveCurrent(label string) (string, error) {
-	home, err := gptauth.ResolveHome("")
+	res, err := gptapp.New().SaveCurrent(label)
 	if err != nil {
-		return "", err
-	}
-	tokens, authMode, found, err := gptauth.ReadCurrentTokens(home)
-	if err != nil {
-		return "", err
-	}
-	if !found {
-		if authMode != "" && authMode != gptauth.AuthModeChatGPT {
-			return "", fmt.Errorf("当前是 %s 认证,没有可保存的 ChatGPT 凭据", prettyAuthMode(authMode))
-		}
-		return "", fmt.Errorf("官方目录没有可保存的凭据(%s)", gptauth.AuthFilePath(home))
-	}
-	idPayload := gptsession.JWTPayload(tokens.IDToken)
-	accessPayload := gptsession.JWTPayload(tokens.AccessToken)
-	email, _ := idPayload["email"].(string)
-	authClaim := gptsession.AuthClaimOf(accessPayload)
-	if authClaim == nil {
-		authClaim = gptsession.AuthClaimOf(idPayload)
-	}
-	planType, _ := authClaim["chatgpt_plan_type"].(string)
-	userID, _ := authClaim["chatgpt_user_id"].(string)
-
-	if label == "" {
-		label = firstNonEmptyStr(email, tokens.AccountID, "auth.json")
-	}
-	account := gptsession.Account{
-		Label:        label,
-		Email:        email,
-		AccountID:    tokens.AccountID,
-		UserID:       userID,
-		PlanType:     planType,
-		SourceFormat: "auth.json",
-		SourceName:   filepath.Base(home),
-		Refreshable:  tokens.RefreshToken != "",
-		Tokens: gptsession.Tokens{
-			IDToken:      tokens.IDToken,
-			AccessToken:  tokens.AccessToken,
-			RefreshToken: tokens.RefreshToken,
-		},
-	}
-	if !account.Refreshable && accessPayload != nil {
-		if exp, ok := accessPayload["exp"].(float64); ok && exp > 0 {
-			t := time.Unix(int64(exp), 0).UTC()
-			account.AccessExpiresAt = &t
-		}
-	}
-	st, err := gptstore.Load(gptstore.DefaultPath())
-	if err != nil {
-		return "", err
-	}
-	stored := gptstore.FromSession(account, time.Now().UTC())
-	_, idx := st.Find(stored.ID)
-	existed := idx >= 0
-	st.Upsert(stored)
-	if st.Data.ActiveID == "" {
-		st.Data.ActiveID = stored.ID
-	}
-	if err := st.Save(); err != nil {
 		return "", err
 	}
 	verb := "已保存当前凭据到账号库"
-	if existed {
+	if res.Updated {
 		verb = "凭据已在账号库中,已更新"
 	}
-	return fmt.Sprintf("%s:%s", verb, stored.Label), nil
+	return fmt.Sprintf("%s:%s", verb, res.Account.Label), nil
 }
 
 // renameAccount 改账号库里的显示名。
 func (m *ChatgptModel) renameAccount(id, label string) error {
-	st, err := gptstore.Load(gptstore.DefaultPath())
-	if err != nil {
-		return err
-	}
-	acc, _ := st.Find(id)
-	if acc == nil {
-		return fmt.Errorf("在账号库中找不到 %q", id)
-	}
-	acc.Label = label
-	return st.Save()
+	_, err := gptapp.New().Rename(id, label)
+	return err
 }
 
 // importAccounts 解析输入(文件路径或粘贴的 JSON),转换后入库。不自动激活。
@@ -501,131 +451,50 @@ func (m *ChatgptModel) importAccounts(raw string) status {
 	if strings.HasPrefix(raw, "{") || strings.HasPrefix(raw, "[") {
 		data = []byte(raw)
 	} else {
-		b, err := os.ReadFile(expandHome(raw))
+		b, err := os.ReadFile(gptapp.ExpandHome(raw))
 		if err != nil {
-			return status{2, "读取文件失败: " + err.Error()}
+			return status{statusErr, "读取文件失败: " + err.Error()}
 		}
 		data = b
-		src = filepath.Base(expandHome(raw))
+		src = filepath.Base(gptapp.ExpandHome(raw))
 	}
-	data = bytes.TrimSpace(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")))
-	if len(data) == 0 {
-		return status{2, "输入为空"}
-	}
-	docs, badDocs, perr := parseJSONDocs(data)
-	if perr != nil {
-		return status{2, "输入不是合法 JSON: " + perr.Error()}
-	}
-	// 多段文档(JSONL/拼接)时,来源名附带序号便于追溯
-	var records []gptsession.Record
-	for i, doc := range docs {
-		name := src
-		if len(docs) > 1 {
-			name = fmt.Sprintf("%s#%d", src, i+1)
+	res, err := gptapp.New().Import(data, src)
+	switch {
+	case errors.Is(err, gptapp.ErrNoAccounts):
+		msg := err.Error()
+		if res.BadDocs > 0 {
+			msg += fmt.Sprintf("(另有 %d 个无效文档)", res.BadDocs)
 		}
-		records = append(records, gptsession.Collect(doc, name)...)
-	}
-	if len(records) == 0 {
-		msg := "未在输入中找到包含 access_token 的会话/账号对象(支持 WebSession 与 sub2api 导出)"
-		if badDocs > 0 {
-			msg += fmt.Sprintf("(另有 %d 个无效文档)", badDocs)
+		return status{statusErr, msg}
+	case errors.Is(err, gptapp.ErrConvertFailed):
+		msg := fmt.Sprintf("全部 %d 项均无法转换", res.Total)
+		if res.BadDocs > 0 {
+			msg += fmt.Sprintf("(另有 %d 个无效文档)", res.BadDocs)
 		}
-		return status{2, msg}
-	}
-	st, err := gptstore.Load(gptstore.DefaultPath())
-	if err != nil {
-		return status{2, "读取账号库失败: " + err.Error()}
-	}
-	now := time.Now().UTC()
-	imported := 0
-	skipped := 0
-	first := ""
-	for _, rec := range records {
-		converted, err := gptsession.Convert(rec, now)
-		if err != nil {
-			skipped++
-			continue
-		}
-		account := gptstore.FromSession(converted, now)
-		st.Upsert(account)
-		if first == "" {
-			first = account.Label
-		}
-		imported++
-	}
-	if imported == 0 {
-		msg := fmt.Sprintf("全部 %d 项均无法转换", len(records))
-		if badDocs > 0 {
-			msg += fmt.Sprintf("(另有 %d 个无效文档)", badDocs)
-		}
-		return status{2, msg}
-	}
-	if err := st.Save(); err != nil {
-		return status{2, "保存账号库失败: " + err.Error()}
+		return status{statusErr, msg}
+	case err != nil:
+		return status{statusErr, err.Error()}
 	}
 	tail := ""
-	if skipped > 0 {
-		tail += fmt.Sprintf(",跳过 %d 项", skipped)
+	if res.Skipped > 0 {
+		tail += fmt.Sprintf(",跳过 %d 项", res.Skipped)
 	}
-	if badDocs > 0 {
-		tail += fmt.Sprintf(",忽略 %d 个无效文档", badDocs)
+	if res.BadDocs > 0 {
+		tail += fmt.Sprintf(",忽略 %d 个无效文档", res.BadDocs)
 	}
-	if imported == 1 {
-		return status{1, fmt.Sprintf("已导入 %s%s,Enter 激活并写入官方目录", first, tail)}
+	if res.Imported == 1 {
+		return status{statusOK, fmt.Sprintf("已导入 %s%s,Enter 激活并写入官方目录", res.First, tail)}
 	}
-	return status{1, fmt.Sprintf("已导入 %d 个账号%s,选中后按 Enter 激活", imported, tail)}
+	return status{statusOK, fmt.Sprintf("已导入 %d 个账号%s,选中后按 Enter 激活", res.Imported, tail)}
 }
 
 // doActivate 把账号投影为官方 auth.json(保序合并、原子写入)。
 func (m *ChatgptModel) doActivate(id string) (string, error) {
-	st, err := gptstore.Load(gptstore.DefaultPath())
+	res, err := gptapp.New().Activate(id)
 	if err != nil {
 		return "", err
 	}
-	acc, _ := st.Find(id)
-	if acc == nil {
-		return "", fmt.Errorf("在账号库中找不到 %q", id)
-	}
-	st.Data.ActiveID = acc.ID
-	if err := st.Save(); err != nil {
-		return "", err
-	}
-	home, err := gptauth.ResolveHome("")
-	if err != nil {
-		return "", err
-	}
-	existing, err := gptauth.ReadAuthFile(home)
-	if err != nil {
-		return "", err
-	}
-	merged, err := gptauth.MergeAuthFile(existing, gptauth.Tokens{
-		IDToken:      acc.Tokens.IDToken,
-		AccessToken:  acc.Tokens.AccessToken,
-		RefreshToken: acc.Tokens.RefreshToken,
-		AccountID:    acc.AccountID,
-	}, time.Now().UTC())
-	if err != nil {
-		return "", err
-	}
-	if _, err := gptauth.WriteAuthFile(home, merged); err != nil {
-		return "", err
-	}
-	now := time.Now().UTC()
-	acc.LastUsedAt = &now
-	_ = st.Save()
-	return "已激活 " + acc.Label + ",已写入 Codex 凭据(" + gptauth.AuthFilePath(home) + ")", nil
-}
-
-// doRemove 从账号库移除,不动官方 auth.json。
-func (m *ChatgptModel) doRemove(id string) error {
-	st, err := gptstore.Load(gptstore.DefaultPath())
-	if err != nil {
-		return err
-	}
-	if _, ok := st.Remove(id); !ok {
-		return fmt.Errorf("在账号库中找不到 %q", id)
-	}
-	return st.Save()
+	return "已激活 " + res.Account.Label + ",已写入 Codex 凭据(" + res.Path + ")", nil
 }
 
 // currentLine 顶部当前凭据状态行。
@@ -665,10 +534,12 @@ func prettyColored(ok bool, s string) string {
 // accentStyle 平台强调色(取当前工具的 accent)。
 var accentStyle = lipgloss.NewStyle().Foreground(cinfo.accent)
 
-// accountTable 渲染账号列表表格(表头 + 动态列宽)。// accountTable 渲染账号列表表格(表头 + 动态列宽)。
+// accountTable 渲染账号列表表格(表头 + 动态列宽,超出可视高度时滚动)。
 func (m ChatgptModel) accountTable() string {
 	rows := [][]string{{"  账号", "套餐", "来源", "ID", "最后使用", "状态"}}
-	for i, a := range m.accounts {
+	start, end := m.windowRange(len(m.accounts), m.cursor)
+	for i := start; i < end; i++ {
+		a := m.accounts[i]
 		inUse := m.current != nil && a.AccountID != "" && a.AccountID == m.current.AccountID
 
 		cursor := "  "
@@ -709,7 +580,30 @@ func (m ChatgptModel) accountTable() string {
 	for i, cell := range rows[0] {
 		rows[0][i] = styleDim.Render(cell)
 	}
-	return joinTable(rows)
+	// 窄终端依次丢弃 来源→ID→最后使用→套餐,保持列宽恒定不折行
+	table := fitTable(rows, m.tableWidth(), []int{2, 3, 4, 1})
+	if start > 0 {
+		table = styleDim.Render(fmt.Sprintf("↑ 上方还有 %d 个", start)) + "\n" + table
+	}
+	if end < len(m.accounts) {
+		table += "\n" + styleDim.Render(fmt.Sprintf("↓ 下方还有 %d 个", len(m.accounts)-end))
+	}
+	return table
+}
+
+// panelContent 当前浮层的正文(滚动窗口用,需与 View 里的内容一致)。
+func (m ChatgptModel) panelContent() string {
+	switch m.mode {
+	case modeHelp:
+		return cHelpView(m.helpWidth())
+	case modeMachine:
+		return m.infoView()
+	case modeDetail:
+		if sel := m.selected(); sel != nil {
+			return m.detailView(sel)
+		}
+	}
+	return ""
 }
 
 func (m ChatgptModel) View() string {
@@ -752,32 +646,21 @@ func (m ChatgptModel) View() string {
 		} else if m.inputFor == inputGRename {
 			purpose = "重命名账号"
 		}
-		overlay = styleBox.Render(purpose + "\n" + m.input.View())
+		overlay = purpose + "\n" + m.input.View()
 	case modeDetail:
 		if sel := m.selected(); sel != nil {
-			overlay = styleBox.Render(m.detailView(sel))
+			overlay = m.detailView(sel)
 		}
 	case modeHelp:
-		overlay = styleBox.Render(cHelpView())
+		overlay = cHelpView(m.helpWidth())
 	case modeMachine:
-		overlay = styleBox.Render(m.infoView())
+		overlay = m.infoView()
+	}
+	if overlay != "" && m.panelOverflow(overlay, cChips) {
+		overlay += "\n\n" + styleDim.Render("(↑/↓ 滚动,其他键返回)")
 	}
 
-	footer := m.bottomBar(&cinfo, cChips)
-	page := m.header(&cinfo) + "\n" + centerBlock(body.String(), w) + "\n"
-	if overlay != "" {
-		page += m.centerBox(overlay) + "\n"
-	}
-	return page + centerBlock(footer, w)
-}
-
-func (m ChatgptModel) findByID(id string) *gptstore.Account {
-	for _, a := range m.accounts {
-		if a.ID == id {
-			return a
-		}
-	}
-	return nil
+	return m.page(&cinfo, body.String(), overlay, cChips)
 }
 
 // prettyAuthMode 认证模式的展示名(官方值为小写,展示遵循大小写)。
@@ -839,36 +722,47 @@ func firstNonEmptyStr(values ...string) string {
 }
 
 // parseJSONDocs 解析导入输入,尽量宽容:
-//  1. 连续多段 JSON —— 单个对象/数组、CPA、sub2api 整包、拼接 JSON 均可;
-//  2. JSONL(每行一个 JSON 对象,常见于批量导出);
-//  3. 上述失败时退回逐行解析,跳过无效行并计数。
+//  1. 连续 JSON 流:单对象/数组、CPA、sub2api 整包、拼接 JSON、以及
+//     "空格分隔的多个 JSON"都算(从终端粘贴多行 JSONL 时,textinput 会把
+//     换行折叠成空格,所以这一条是粘贴场景的必经之路);
+//  2. 流解析一个都拿不到时,退回逐行解析(JSONL 文件),跳过无效行并计数。
+//
+// 尾部有无法解析的残留时只计数不报错:导入是"能救多少救多少"。
 func parseJSONDocs(data []byte) (docs []any, badDocs int, err error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	for {
 		var v any
-		if derr := dec.Decode(&v); derr != nil {
-			if errors.Is(derr, io.EOF) {
-				return docs, 0, nil
+		derr := dec.Decode(&v)
+		if derr != nil {
+			if len(docs) > 0 {
+				if !errors.Is(derr, io.EOF) {
+					badDocs++ // 尾部残留
+				}
+				return docs, badDocs, nil
 			}
 			break
 		}
 		docs = append(docs, v)
 	}
-	docs = nil
+
+	// 流解析失败:按行重试(JSONL / 逐行拼接)。只接受对象与数组,
+	// 单独的一行字符串/数字不是账号文档。
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		var v any
-		if json.Unmarshal([]byte(line), &v) == nil {
+		if json.Unmarshal([]byte(line), &v) != nil {
+			badDocs++
+			continue
+		}
+		switch v.(type) {
+		case map[string]any, []any:
 			docs = append(docs, v)
-		} else {
+		default:
 			badDocs++
 		}
-	}
-	if len(docs) == 0 {
-		return nil, badDocs, errors.New("未能解析出任何 JSON 文档")
 	}
 	return docs, badDocs, nil
 }
@@ -964,28 +858,23 @@ func (m ChatgptModel) detailView(a *gptstore.Account) string {
 	return strings.Join(lines, "\n")
 }
 
-func cHelpView() string {
-	return strings.Join([]string{
-		styleTitle.Render("按键说明(ChatGPT 账号切换器)"),
-		"j/k 或 ↑/↓   移动光标",
-		"←/→          在底部操作栏中选择操作,回车执行",
-		"enter        激活选中账号(再按一次 Enter 确认):写入 Codex 的凭据,原文件自动备份",
-		"i            导入会话凭据 JSON(WebSession / sub2api),",
-		styleDim.Render("             输入文件路径,或直接把 JSON 粘贴进输入框;导入只入库,不自动激活"),
-		"s            保存当前 auth.json 凭据到账号库(输入显示名)",
-		"S            快存当前凭据(自动命名)",
-		"r            重命名选中账号",
-		"d            从账号库移除(按两次 d 确认,移入回收站;退出前可按 z 撤销)",
-		"z            撤销最近一次删除",
-		"m            查看官方目录/账号库信息",
-		"?            本帮助",
-		"Esc          返回目标软件选择",
-		"q / Q / Ctrl+C 退出",
-		"",
-		styleDim.Render("账号库位置:" + gptstore.DefaultPath()),
-		"",
-		styleDim.Render("按任意键返回"),
-	}, "\n")
+func cHelpView(width int) string {
+	return renderHelp("按键说明(ChatGPT 账号切换器)", []helpEntry{
+		{"j/k 或 ↑/↓", "移动光标"},
+		{"←/→", "在底部操作栏中选择操作,回车执行"},
+		{"enter", "激活选中账号(再按一次 Enter 确认):写入 Codex 的凭据"},
+		{"i", "导入会话凭据 JSON(WebSession / sub2api)"},
+		{"", "输入文件路径,或直接把 JSON 粘贴进输入框;导入只入库,不自动激活"},
+		{"s", "保存当前 auth.json 凭据到账号库(输入显示名)"},
+		{"r", "重命名选中账号"},
+		{"d", "从账号库移除(按两次 d 确认,移入回收站)"},
+		{"z", "撤销最近一次删除"},
+		{"n", "登出:清空本地 auth.json(账号保留在账号库),用于重新登录新账号"},
+		{"m", "查看官方目录/账号库信息"},
+		{"?", "本帮助"},
+		{"Esc", "返回目标软件选择"},
+		{"q / Q / Ctrl+C", "退出"},
+	}, []string{styleDim.Render("账号库位置:" + gptstore.DefaultPath())}, width)
 }
 
 func orDash(value string) string {
@@ -993,14 +882,4 @@ func orDash(value string) string {
 		return "—"
 	}
 	return value
-}
-
-func shortID(id string) string {
-	if id == "" {
-		return "—"
-	}
-	if len(id) <= 12 {
-		return id
-	}
-	return id[:12] + "…"
 }
