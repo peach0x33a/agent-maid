@@ -1,3 +1,5 @@
-agent-maid
+# 编译产物（仓库根目录的二进制；注意要带前导 /，否则会连
+# skills/agent-maid/ 这类同名目录一起忽略掉）
+/agent-maid
 dist/
 *.test
