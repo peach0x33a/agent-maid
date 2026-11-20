@@ -21,6 +21,7 @@ func setupIsolated(t *testing.T) {
 	t.Setenv("ANTIGRAVITY_STORE_DIR", t.TempDir())
 	t.Setenv("ZCODE_V2_DIR", t.TempDir())
 	t.Setenv("ANTIGRAVITY_GEMINI_DIR", t.TempDir())
+	t.Setenv("ANTIGRAVITY_KEYRING", "0")
 	t.Setenv("CODEX_HOME", t.TempDir())
 	plainMode, noAnim = false, true
 }

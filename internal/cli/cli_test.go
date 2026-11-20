@@ -21,6 +21,7 @@ func setup(t *testing.T) (Env, *bytes.Buffer) {
 	t.Setenv("ANTIGRAVITY_GEMINI_DIR", filepath.Join(base, "gemini"))
 	t.Setenv("ANTIGRAVITY_CLI_DIR", "")
 	t.Setenv("ANTIGRAVITY_STORE_DIR", filepath.Join(base, "aslots"))
+	t.Setenv("ANTIGRAVITY_KEYRING", "0")
 	out := &bytes.Buffer{}
 	return Env{Stdout: out, Stderr: out, Stdin: strings.NewReader("")}, out
 }

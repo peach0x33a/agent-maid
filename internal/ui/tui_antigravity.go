@@ -101,7 +101,7 @@ type aApplyResultMsg struct {
 type aRefreshMsg struct{}
 
 func (m AntigravityModel) refresh() tea.Msg {
-	slots, _ := m.svc.Store.List()
+	slots, _ := m.svc.List()
 	return aLoadedMsg{slots: slots, current: m.svc.Current(), agRun: antigravity.Running()}
 }
 
@@ -114,7 +114,7 @@ func (m *AntigravityModel) applyLoaded(lm aLoadedMsg) {
 		m.positioned = true
 		if m.current.Exists {
 			for i := range m.slots {
-				if antigravity.EqualToken(m.current.Token, m.slots[i].Token) {
+				if antigravity.SameAccount(m.current.Token, m.slots[i].Token) {
 					m.cursor = i
 					break
 				}
@@ -498,6 +498,9 @@ func (m AntigravityModel) currentLine() string {
 	if m.current.AuthMode != "" {
 		line += styleDim.Render("[" + m.current.AuthMode + "]")
 	}
+	if m.current.Source == antigravity.SourceKeyring {
+		line += styleDim.Render(" [系统钥匙串]")
+	}
 	now := time.Now()
 	if m.current.State.Expired(now) && !m.current.State.Refreshable {
 		line += styleWarn.Render("  ⚠凭据已过期且无 refresh_token,需在 agy 重新登录")
@@ -512,7 +515,7 @@ func (m AntigravityModel) slotTable() string {
 	now := time.Now()
 	for i := start; i < end; i++ {
 		slot := m.slots[i]
-		inUse := m.current.Exists && antigravity.EqualToken(m.current.Token, slot.Token)
+		inUse := m.current.Exists && antigravity.SameAccount(m.current.Token, slot.Token)
 
 		cursor := "  "
 		nameStyle := stylePlainName
@@ -645,10 +648,15 @@ func aInfoView(m AntigravityModel) string {
 		rows = append(rows, styleDim.Render(expiryMark(m.current.State, time.Now())))
 		current = strings.Join(rows, "\n")
 	}
+	source := styleDim.Render("文件")
+	if m.current.Source == antigravity.SourceKeyring {
+		source = accentSt.Render("系统钥匙串(agy 优先读取)")
+	}
 	lines := []string{
 		styleTitle.Render("信息"),
 		styleDim.Render("agy 数据目录: ") + val.Render(antigravity.CLIDir()),
-		styleDim.Render("登录凭据:     ") + val.Render(antigravity.CredentialLocation()),
+		styleDim.Render("登录凭据:     ") + val.Render(antigravity.CredentialLocationFor(m.current.Source)),
+		styleDim.Render("凭据存储:     ") + source,
 	}
 	parts := strings.Split(current, "\n")
 	lines = append(lines, styleDim.Render("当前账号:     ")+parts[0])

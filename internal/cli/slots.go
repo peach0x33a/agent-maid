@@ -271,7 +271,7 @@ func zcodeLogout(env Env) int {
 
 func agySlotViews() ([]slotView, antigravity.CurrentInfo, error) {
 	svc := antigravity.New()
-	slots, err := svc.Store.List()
+	slots, err := svc.List()
 	if err != nil {
 		return nil, antigravity.CurrentInfo{}, err
 	}
@@ -282,7 +282,7 @@ func agySlotViews() ([]slotView, antigravity.CurrentInfo, error) {
 		v := slotView{
 			Name:        s.Name,
 			Email:       s.Email,
-			InUse:       current.Exists && antigravity.EqualToken(current.Token, s.Token),
+			InUse:       current.Exists && antigravity.SameAccount(current.Token, s.Token),
 			LastUsedAt:  shortTime(s.LastUsedAt),
 			Refreshable: s.State.Refreshable,
 			Expired:     s.State.Expired(now),
@@ -307,9 +307,10 @@ func agyList(env Env) int {
 			Total   int        `json:"total"`
 			Slots   []slotView `json:"slots"`
 			Current string     `json:"current,omitempty"`
+			Source  string     `json:"source,omitempty"`
 			Running bool       `json:"running"`
 			Path    string     `json:"path"`
-		}{payload{"list", true, ""}, "antigravity", len(views), views, current.Email, antigravity.Running(), antigravity.CredentialLocation()})
+		}{payload{"list", true, ""}, "antigravity", len(views), views, current.Email, current.Source, antigravity.Running(), antigravity.CredentialLocationFor(current.Source)})
 		return CodeOK
 	}
 	if len(views) == 0 {
@@ -348,16 +349,17 @@ func agyCurrent(env Env) int {
 			ExpiresAt   string `json:"expires_at,omitempty"`
 			Expired     bool   `json:"expired"`
 			Path        string `json:"path"`
+			Source      string `json:"source,omitempty"`
 			Running     bool   `json:"running"`
 		}{
 			payload{"current", true, ""}, "antigravity", current.Exists, current.Email, current.AuthMode,
 			current.State.Refreshable, shortTime(current.State.ExpiresAt),
-			current.State.Expired(nowLocal()), antigravity.CredentialLocation(), antigravity.Running(),
+			current.State.Expired(nowLocal()), antigravity.CredentialLocationFor(current.Source), current.Source, antigravity.Running(),
 		})
 		return CodeOK
 	}
 	if !current.Exists {
-		fmt.Fprintf(env.Stdout, "当前未登录 Antigravity(%s 不存在)\n", antigravity.CredentialLocation())
+		fmt.Fprintf(env.Stdout, "当前未登录 Antigravity(%s 不存在,系统钥匙串里也没有登录项)\n", antigravity.CredentialLocation())
 		return CodeOK
 	}
 	fmt.Fprintf(env.Stdout, "邮箱:     %s\n", orDash(current.Email))
@@ -368,7 +370,12 @@ func agyCurrent(env Env) int {
 	if !current.State.Refreshable {
 		fmt.Fprintln(env.Stdout, "注意: 凭据没有 refresh_token,过期后需在 agy / Antigravity Desktop 重新登录")
 	}
-	fmt.Fprintf(env.Stdout, "凭据:     %s\n", antigravity.CredentialLocation())
+	if current.Source == antigravity.SourceKeyring {
+		fmt.Fprintln(env.Stdout, "凭据存储: 系统钥匙串(agy 优先读取;切换时同步更新)")
+	} else {
+		fmt.Fprintln(env.Stdout, "凭据存储: 文件")
+	}
+	fmt.Fprintf(env.Stdout, "凭据:     %s\n", antigravity.CredentialLocationFor(current.Source))
 	return CodeOK
 }
 

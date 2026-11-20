@@ -12,9 +12,9 @@
 |---|---|---|
 | **ChatGPT（Codex）** | `~/.codex/auth.json` | 导入多格式会话凭据建立账号库，一键投影为官方 Codex 原生 `auth.json` |
 | **ZCode** | `~/.zcode/v2/credentials.json` | 账号槽位：凭据密文原样快照，一键切换 |
-| **Antigravity** | `~/.gemini/antigravity-cli/antigravity-oauth-token` | agy CLI 登录凭据快照与恢复 |
+| **Antigravity** | OS Keychain/Keyring（`gemini/antigravity`）+ 旧版 `~/.gemini/antigravity-cli/antigravity-oauth-token` | agy CLI / Desktop 登录凭据快照与恢复（优先同步钥匙串） |
 
-全部操作**纯本地、不联网**（Antigravity/ChatGPT 不刷新 token，有 `refresh_token` 的账号由官方端自行续期）。
+全部操作**纯本地、不联网**（账号凭据只在本地快照；有 `refresh_token` 的账号由官方端自行续期）。
 
 ## 特性
 
@@ -147,13 +147,15 @@ cp -r skills/agent-maid ~/.agents/skills/     # 或 ~/.claude/skills/
 - **登出**（`N`）：清空本地凭据让 ZCode 回到未登录态，用于重新登录新账号——避免在软件内点「退出登录」导致服务端吊销令牌；当前账号会先自动备份。
 - 显示 `使用中` 徽标与 `⚠跨机/跨密钥` 警告；`m` 可查看密钥指纹、deviceMid 等机器信息。
 
-### Antigravity（agy CLI）账号管理
+### Antigravity（agy CLI / Desktop）账号管理
 
-- 管理的是 **agy（Antigravity CLI）** 的登录凭据：`~/.gemini/antigravity-cli/antigravity-oauth-token`（单个 JSON，0600，紧凑单行），不是桌面端那个从未存在过的 `~/.gemini/oauth_creds.json`。
-- 槽位保存该文件原文；切换即原子写回，写回格式与 agy 自身完全一致（紧凑 JSON、无结尾换行、`0600`），因此 agy 直接可用。槽位标签（邮箱）取文件里的 `id_token_email`，缺失时回退到 `id_token` JWT 声明。
+- 管理的是 **Antigravity（agy CLI 与 Desktop）** 的登录凭据。新版把它们放在 OS Keychain/Keyring 的 `gemini/antigravity` 条目里；旧版 agy 曾使用 `~/.gemini/antigravity-cli/antigravity-oauth-token`（单个 JSON，0600，紧凑单行），本工具保留对它的读写兼容。Linux 上还会兜底识别 agy 另一套 Secret Service 条目（`jetski-standalone-oauth-token`）。
+- 只改文件是不够的：钥匙串里若有旧账号，agy 启动时会优先用它。因此 agent-maid 在钥匙串可用时先同步钥匙串条目（macOS/Linux 用 go-keyring，Linux 另一套条目用 `secret-tool`，保留原 label/属性），旧版文件已存在时一并更新；钥匙串不可用（headless、无 D-Bus、未激活）时自动只读写文件。`current` 与信息页会显示当前实际来源。
+- 槽位保存凭据原文；写回格式与 agy 自身完全一致（紧凑 JSON、无结尾换行、`0600`），因此 agy 直接可用。槽位标签（邮箱）取凭据里的 `id_token_email`，缺失时回退到 `id_token` JWT 声明。
+- agy 会每小时用 `refresh_token` 续期并改写 `access_token`/`expiry`。agent-maid 按**账号身份**（邮箱 + 认证方式，兜底 refresh_token）判断「使用中」，续期后仍能认出同一账号，并把槽位同步为最新凭据，不会误报「未保存」或生成多余的 `auto-*` 备份。
 - 凭据里有 `refresh_token` 时过期由 agy 自动续期，界面标注「可自动续期」；没有则标注 `⚠无refresh_token`。
-- agy 正在运行时会提示：切换后建议尽快重启 agy，避免运行中的凭据回写覆盖。
-- **登出**（`N`）：把凭据文件改名为 `.antigravity-oauth-token.logged-out-<时间>`，与 agy 自己的登出行为一致（误登出还能找回），当前账号自动备份到槽位。
+- Antigravity（CLI/Desktop，含 agy 1.5.13 的 `agy-node` / `jetski` 子进程）正在运行时会提示：切换后建议尽快重启，避免运行中的凭据回写覆盖。
+- **登出**（`N`）：删除钥匙串条目，并把旧版凭据文件改名为 `.antigravity-oauth-token.logged-out-<时间>`，与 agy 自己的登出行为一致（误登出还能找回），当前账号自动备份到槽位。
 
 ## 配置与数据
 
@@ -184,6 +186,8 @@ cp -r skills/agent-maid ~/.agents/skills/     # 或 ~/.claude/skills/
 | `ANTIGRAVITY_GEMINI_DIR` | 覆盖 Antigravity 的 gemini 数据目录（缺省 `~/.gemini`） |
 | `ANTIGRAVITY_CLI_DIR` | 覆盖 agy 数据目录（缺省 `$ANTIGRAVITY_GEMINI_DIR/antigravity-cli`） |
 | `ANTIGRAVITY_STORE_DIR` | 覆盖 Antigravity 槽位目录（缺省 `~/.config/agent-maid/antigravity/slots`） |
+| `ANTIGRAVITY_KEYRING` | 设为 `0` 关闭 OS 钥匙串读写（只读写文件） |
+| `ANTIGRAVITY_SECRET_TOOL` | 覆盖 Linux 另一套 Secret Service 探测用的 `secret-tool` 路径（缺省从 `PATH` 查找） |
 
 ## 平台支持
 
@@ -194,8 +198,9 @@ cp -r skills/agent-maid ~/.agents/skills/     # 或 ~/.claude/skills/
 | 配置目录 | `~/.config/agent-maid` | `~/.config/agent-maid` | `%AppData%\agent-maid` |
 | 运行检测（/proc、ps、tasklist） | ✓ | 尽力而为¹ | ✓ |
 | ZCode「等待退出后切换」 | ✓ | 同左（依赖进程检测） | 同左（依赖进程检测） |
+| Antigravity 钥匙串同步 | ✓（go-keyring；另一套条目用 `secret-tool`） | ✓（Keychain） | — |
 
-¹ macOS 通过 `ps` 还原 argv 属尽力而为，不保证兼容性。Windows 上文件权限位（0600）不映射 NTFS ACL，建议将配置目录放在受保护的账户下；TUI 建议在 Windows Terminal 中运行。
+¹ macOS 通过 `ps` 还原 argv 属尽力而为，不保证兼容性。Windows 上文件权限位（0600）不映射 NTFS ACL，建议将配置目录放在受保护的账户下；TUI 建议在 Windows Terminal 中运行。macOS / Linux 桌面若把凭据放进系统钥匙串，agent-maid 会同步更新；钥匙串不可用（headless、无 D-Bus、锁定）时自动只读写文件，不会让切换失败。
 
 ## 项目结构
 

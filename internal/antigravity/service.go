@@ -19,10 +19,11 @@ func New() *Service { return &Service{Store: NewStore()} }
 
 // CurrentInfo 当前登录状态。
 type CurrentInfo struct {
-	Exists    bool   // antigravity-oauth-token 是否存在
+	Exists    bool   // 凭据是否存在(钥匙串或文件)
 	Email     string // 账号邮箱
 	AuthMode  string // consumer / enterprise
 	Token     Token  // 凭据原文
+	Source    string // SourceKeyring / SourceFile
 	State     TokenState
 	LoggedOut string // 最近一次登出留下的备份文件名(未登录时提示用)
 }
@@ -30,7 +31,7 @@ type CurrentInfo struct {
 // Current 读取当前登录账号(纯本地,不联网)。
 func (s *Service) Current() CurrentInfo {
 	info := CurrentInfo{}
-	tok, err := ReadToken()
+	tok, source, err := ReadTokenWithSource()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			info.LoggedOut = latestLoggedOut()
@@ -39,10 +40,37 @@ func (s *Service) Current() CurrentInfo {
 	}
 	info.Exists = true
 	info.Token = tok
+	info.Source = source
 	info.Email = TokenEmail(tok)
 	info.AuthMode = TokenAuthMethod(tok)
 	info.State = TokenStateOf(tok)
 	return info
+}
+
+// List 返回全部槽位,并把"当前账号"对应的槽位同步成 agy 最新刷新的凭据。
+// agy 续期后会重写 access_token/expiry,如果不同步,槽位会一直停在旧
+// access_token,界面也认不出"正在使用"。
+func (s *Service) List() ([]Slot, error) {
+	slots, err := s.Store.List()
+	if err != nil {
+		return nil, err
+	}
+	current, err := ReadToken()
+	if err != nil {
+		return slots, nil
+	}
+	for i := range slots {
+		if EqualToken(slots[i].Token, current) || !SameAccount(slots[i].Token, current) {
+			continue
+		}
+		slots[i].Token = current
+		slots[i].Email = TokenEmail(current)
+		slots[i].State = TokenStateOf(current)
+		if saved, err := s.Store.Save(slots[i].Name, slots[i]); err == nil {
+			slots[i] = saved
+		}
+	}
+	return slots, nil
 }
 
 // SaveCurrent 把当前登录凭据保存进槽位。覆盖已存在槽位需 allowOverwrite。
@@ -107,7 +135,14 @@ func (s *Service) ApplyWith(name string, opts ApplyOptions) (autoBackup string, 
 	current, err := ReadToken()
 	switch {
 	case err == nil:
-		if EqualToken(current, slot.Token) {
+		if SameAccount(current, slot.Token) {
+			// 同一账号:agy 可能已经刷新过凭据,把槽位更新成最新原文,
+			// 不产生 auto-* 备份,也不写回旧 access_token。
+			if !EqualToken(current, slot.Token) {
+				slot.Token = current
+				slot.Email = TokenEmail(current)
+				_, _ = s.Store.Save(name, slot)
+			}
 			_ = s.Store.TouchLastUsed(name, time.Now()) // 确认为当前账号
 			return "", nil
 		}
@@ -165,14 +200,15 @@ func (s *Service) BackupCurrentIfUncovered() (string, error) {
 	return name, nil
 }
 
-// currentCovered 判断当前凭据是否与某个槽位完全一致(即不会因切换而丢失)。
+// currentCovered 判断当前凭据是否已被某个槽位覆盖(即不会因切换而丢失)。
+// 按账号身份比较:agy 续期后 access_token 会变,但不算换了账号。
 func (s *Service) currentCovered(current Token) bool {
 	slots, err := s.Store.List()
 	if err != nil {
 		return false
 	}
 	for _, slot := range slots {
-		if EqualToken(current, slot.Token) {
+		if SameAccount(current, slot.Token) {
 			return true
 		}
 	}

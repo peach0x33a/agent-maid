@@ -15,14 +15,14 @@ description: >-
 # agent-maid
 
 Local, offline account manager for three AI tools. It never talks to the
-network: it snapshots and restores **local credential files**, so switching
-accounts is a file swap plus (for the app) a restart.
+network: it snapshots and restores **local credentials**, so switching
+accounts is a credential swap plus (for the app) a restart.
 
-| Target key | App | Credential file agent-maid writes |
+| Target key | App | Where agent-maid writes the credential |
 |---|---|---|
 | `chatgpt` | ChatGPT / Codex CLI | `~/.codex/auth.json` (or `$CODEX_HOME`) |
 | `zcode` | ZCode desktop | `~/.zcode/v2/credentials.json` (or `$ZCODE_V2_DIR`) |
-| `antigravity` | agy (Antigravity CLI) | `~/.gemini/antigravity-cli/antigravity-oauth-token` |
+| `antigravity` | agy (Antigravity CLI) / Desktop | OS Keychain/Keyring (`gemini/antigravity`) + legacy `~/.gemini/antigravity-cli/antigravity-oauth-token` |
 
 ## Run the commands
 
@@ -105,8 +105,14 @@ memory.
 - **`logout` does not revoke server-side tokens.** It clears the local file so
   the app shows a login screen. This is deliberate: logging out inside the app
   can revoke the token and kill the saved slot.
-- **agy logout renames instead of deleting** (`.antigravity-oauth-token.logged-out-*`),
-  matching agy's own behaviour, so a mistaken logout is recoverable.
+- **agy logout deletes the keyring item and renames the file**
+  (`.antigravity-oauth-token.logged-out-*`), matching agy's own behaviour, so a
+  mistaken logout is recoverable.
+- **agy/Desktop prefer the OS Keychain/Keyring over the file.** agent-maid
+  updates the `gemini/antigravity` item (and Linux's alternate
+  `jetski-standalone-oauth-token` item when present); if the keyring is
+  unavailable it only touches the file. If a switch seems ignored, check
+  `current --json` → `source` and restart agy.
 - `import` is chatgpt-only. ZCode and agy accounts can only be captured from a
   live login via `save`; there is no file format to import.
 

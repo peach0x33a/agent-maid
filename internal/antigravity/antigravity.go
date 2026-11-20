@@ -12,7 +12,8 @@
 //	}
 //
 // 旧版 agy CLI 曾将同一份 JSON 存放在 ~/.gemini/antigravity-cli/antigravity-oauth-token,
-// 本包在读取时保留对该文件的向后兼容。
+// 本包在读取时保留对该文件的向后兼容;Linux 上还会兜底识别 agy 另一套
+// Secret Service 条目(service="jetski-standalone-oauth-token")。
 //
 // 槽位保存的是该凭据的原文 JSON 快照,切换即原子写回——与 ZCode 槽位同一
 // 思路:不解密、不联网、不刷新 token(过期后由 Antigravity 自己用 refresh_token 续期)。
@@ -71,11 +72,11 @@ func (osKeyring) Delete(service, user string) error {
 
 var kr keyringStore = osKeyring{}
 
-// useKeyring 判断当前是否应使用 macOS Keychain 读写凭据。
-// 仅 macOS 上最新版 agy CLI 与 Antigravity Desktop 共用 Keychain;
+// useKeyring 判断当前是否应使用 OS Keychain/Keyring 读写凭据。
+// macOS 与 Linux 上的新版 agy CLI / Antigravity Desktop 都会使用它;
 // 其他平台继续使用 ~/.gemini/antigravity-cli/antigravity-oauth-token 文件。
 // 当测试或用户显式覆盖了 ANTIGRAVITY_GEMINI_DIR / ANTIGRAVITY_CLI_DIR 时,
-// 默认回退到文件模式,避免测试污染宿主机的真实 Keychain。
+// 默认回退到文件模式,避免测试污染宿主机的真实钥匙串。
 func useKeyring() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("ANTIGRAVITY_KEYRING"))) {
 	case "off", "false", "0", "file":
@@ -83,17 +84,41 @@ func useKeyring() bool {
 	case "on", "true", "1":
 		return true
 	}
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		return false
 	}
 	return strings.TrimSpace(os.Getenv("ANTIGRAVITY_GEMINI_DIR")) == "" &&
 		strings.TrimSpace(os.Getenv("ANTIGRAVITY_CLI_DIR")) == ""
 }
 
-// CredentialLocation 返回当前生效的凭据存储位置描述(用于展示与提示)。
+// keyringReadable 报告 OS 钥匙串当前是否可用(能读到条目或明确为空)。
+// headless / 无 D-Bus 环境下 go-keyring 会返回"not activatable"之类的错误,
+// 此时应像 agy 一样回落到文件,而不是把切换整个失败掉。
+func keyringReadable() bool {
+	if !useKeyring() {
+		return false
+	}
+	_, err := kr.Get(keyringService, keyringAccount)
+	return err == nil || errors.Is(err, keyring.ErrNotFound)
+}
+
+// keyringLocation 返回共用 Keychain/Keyring 条目的展示文本。
+func keyringLocation() string {
+	return fmt.Sprintf("系统钥匙串 (%s/%s)", keyringService, keyringAccount)
+}
+
+// CredentialLocation 返回凭据可能所在的位置(用于"未找到凭据"等提示)。
 func CredentialLocation() string {
 	if useKeyring() {
-		return fmt.Sprintf("Keychain (%s/%s)", keyringService, keyringAccount)
+		return keyringLocation() + " 或 " + TokenPath()
+	}
+	return TokenPath()
+}
+
+// CredentialLocationFor 按实际来源返回凭据位置。
+func CredentialLocationFor(source string) string {
+	if source == SourceKeyring {
+		return keyringLocation()
 	}
 	return TokenPath()
 }
@@ -120,6 +145,56 @@ func CLIDir() string {
 
 // TokenPath 返回 agy 登录凭据文件的完整路径。
 func TokenPath() string { return filepath.Join(CLIDir(), tokenFileName) }
+
+// 凭据来源。agy 在 Linux 上优先用系统钥匙串,读不到才回落到文件。
+const (
+	SourceKeyring = "keyring"
+	SourceFile    = "file"
+)
+
+// ReadToken 读取 agy 当前生效的凭据(系统钥匙串优先,其次文件)。
+// 文件缺失且钥匙串里也没有条目时返回 os.ErrNotExist 包装错误。
+func ReadToken() (Token, error) {
+	tok, _, err := ReadTokenWithSource()
+	return tok, err
+}
+
+// ReadTokenWithSource 读取凭据并返回来源(SourceKeyring / SourceFile)。
+// 顺序与 agy 一致:主钥匙串(gemini/antigravity)→ Linux 上的另一套
+// Secret Service 条目 → 旧版文件;都不存在时返回 os.ErrNotExist。
+func ReadTokenWithSource() (Token, string, error) {
+	if useKeyring() {
+		raw, keyErr := kr.Get(keyringService, keyringAccount)
+		var parseErr error
+		if keyErr == nil {
+			tok, err := parseTokenJSON([]byte(raw), CredentialLocation())
+			if err == nil {
+				return tok, SourceKeyring, nil
+			}
+			parseErr = err
+		}
+		// Linux:agy 的另一些版本把同一份凭据放在
+		// service=jetski-standalone-oauth-token 下。
+		if tok, ok := readKeyringToken(); ok {
+			return tok, SourceKeyring, nil
+		}
+		if tok, fileErr := readTokenFile(); fileErr == nil {
+			return tok, SourceFile, nil
+		}
+		if parseErr != nil {
+			return nil, "", parseErr
+		}
+		if keyErr == nil || errors.Is(keyErr, keyring.ErrNotFound) {
+			return nil, "", os.ErrNotExist
+		}
+		return nil, "", fmt.Errorf("读取 %s 失败: %w", CredentialLocation(), keyErr)
+	}
+	tok, err := readTokenFile()
+	if err != nil {
+		return nil, "", err
+	}
+	return tok, SourceFile, nil
+}
 
 // parseTokenJSON 校验凭据字节是否为合法的 JSON 对象。
 func parseTokenJSON(data []byte, source string) (Token, error) {
@@ -153,6 +228,7 @@ func compactTokenJSON(tok Token) ([]byte, error) {
 	return compact.Bytes(), nil
 }
 
+// readTokenFile 读取旧版 agy 的文件凭据。
 func readTokenFile() (Token, error) {
 	data, err := os.ReadFile(TokenPath())
 	if err != nil {
@@ -161,34 +237,18 @@ func readTokenFile() (Token, error) {
 	return parseTokenJSON(data, TokenPath())
 }
 
-// ReadToken 读取 Antigravity 凭据。
-// 优先读取 OS Keyring(新版 agy CLI 与 Antigravity Desktop 共用),
-// 若 Keyring 未找到则回退到旧版凭据文件;都不存在时返回 os.ErrNotExist。
-func ReadToken() (Token, error) {
-	if useKeyring() {
-		raw, err := kr.Get(keyringService, keyringAccount)
-		if err == nil {
-			return parseTokenJSON([]byte(raw), CredentialLocation())
-		}
-		if tok, fileErr := readTokenFile(); fileErr == nil {
-			return tok, nil
-		}
-		if errors.Is(err, keyring.ErrNotFound) {
-			return nil, os.ErrNotExist
-		}
-		return nil, fmt.Errorf("读取 %s 失败: %w", CredentialLocation(), err)
-	}
-	return readTokenFile()
-}
-
-// WriteToken 写回凭据。在 Keyring 模式下写入 OS Keyring(若旧版凭据文件
-// 已存在则同步更新,避免版本混用时读到旧凭据);文件模式下原子写回 0600 文件。
+// WriteToken 写回凭据。Keyring 模式下写入共用 Keychain/Keyring 条目
+// (Linux 上若存在 agy 的另一套 Secret Service 条目也同步更新),旧版凭据
+// 文件已存在时一并更新;文件模式下原子写回 0600 文件。
 func WriteToken(tok Token) error {
 	compact, err := compactTokenJSON(tok)
 	if err != nil {
 		return err
 	}
-	if useKeyring() {
+	if useKeyring() && keyringReadable() {
+		if err := writeKeyringToken(Token(compact)); err != nil {
+			return err
+		}
 		if err := kr.Set(keyringService, keyringAccount, string(compact)); err != nil {
 			return fmt.Errorf("写入 %s 失败: %w", CredentialLocation(), err)
 		}
@@ -202,12 +262,16 @@ func WriteToken(tok Token) error {
 	return atomicio.WriteFile(TokenPath(), compact, 0o600)
 }
 
-// ClearToken 让 Antigravity 回到未登录态:清空 OS Keyring 凭据,并把旧版
-// 凭据文件(若存在)改名成 .antigravity-oauth-token.logged-out-<时间> 保留。
+// ClearToken 让 Antigravity 回到未登录态:清空 OS Keyring 凭据(Linux 上
+// 连同另一套 Secret Service 条目),并把旧版凭据文件(若存在)改名成
+// .antigravity-oauth-token.logged-out-<时间> 保留,误登出还能找回。
 func ClearToken() error {
-	if useKeyring() {
+	if useKeyring() && keyringReadable() {
 		if err := kr.Delete(keyringService, keyringAccount); err != nil && !errors.Is(err, keyring.ErrNotFound) {
 			return fmt.Errorf("清除 %s 失败: %w", CredentialLocation(), err)
+		}
+		if err := deleteKeyringToken(); err != nil {
+			return err
 		}
 	}
 	path := TokenPath()
@@ -315,6 +379,38 @@ func parseTime(value string) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+// TokenIdentity 返回账号身份键:优先邮箱(agy 写入的 id_token_email),
+// 没有邮箱时退回 refresh_token;都没有则返回空,只能按原文比较。
+// 用于识别"agy 自己刷新过 access_token"后的同一账号。
+func TokenIdentity(tok Token) string {
+	if email := TokenEmail(tok); email != "" {
+		return "email:" + strings.ToLower(email)
+	}
+	inner := tokenInner(tokenDoc(tok))
+	if inner == nil {
+		return ""
+	}
+	if rt := strings.TrimSpace(str(inner["refresh_token"])); rt != "" {
+		return "refresh:" + rt
+	}
+	return ""
+}
+
+// SameAccount 判断两份凭据是否属于同一个账号。agy 会每小时用
+// refresh_token 续期并重写凭据(access_token/expiry 变化),所以"正在使用"
+// 不能只按原文比较;身份相同时还要看认证方式是否冲突(consumer/enterprise)。
+func SameAccount(a, b Token) bool {
+	if EqualToken(a, b) {
+		return true
+	}
+	ida, idb := TokenIdentity(a), TokenIdentity(b)
+	if ida == "" || ida != idb {
+		return false
+	}
+	ma, mb := TokenAuthMethod(a), TokenAuthMethod(b)
+	return ma == "" || mb == "" || ma == mb
 }
 
 // EqualToken 判断两份凭据内容是否一致(按 JSON 语义比较,忽略空白与键序)。

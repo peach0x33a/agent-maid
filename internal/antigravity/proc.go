@@ -42,7 +42,16 @@ func isAntigravityProc(argv []string) bool {
 		}
 		return false
 	}
+	// 1.5.13 起 agy 可能带 bundled agy-node / jetski 语言服务子进程;
+	// 它们运行期间同样会回写凭据。
+	switch base {
+	case "agy-node", "jetski-language-server":
+		return true
+	}
 	// 辅助进程/桌面端 Helper(如 antigravity-cli/bin/agentapi, Antigravity Helper)
+	if base == "agentapi" && strings.Contains(strings.ToLower(argv[0]), "antigravity") {
+		return true
+	}
 	return strings.HasPrefix(base, "antigravity-cli") ||
 		strings.HasPrefix(base, "antigravity-") ||
 		strings.HasPrefix(base, "antigravity ")

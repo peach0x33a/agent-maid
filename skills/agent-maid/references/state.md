@@ -22,7 +22,9 @@ switch):
 ```
 ~/.codex/auth.json                                          # chatgpt
 ~/.zcode/v2/credentials.json                                # zcode
-~/.gemini/antigravity-cli/antigravity-oauth-token           # antigravity (agy)
+~/.gemini/antigravity-cli/antigravity-oauth-token           # antigravity (legacy file)
+# agy CLI / Desktop normally keep it in the OS Keychain/Keyring
+# (`gemini`/`antigravity`; Linux may use `jetski-standalone-oauth-token`).
 ```
 
 All of these are `0600`. Slot files contain **plaintext credentials** (the agy
@@ -41,6 +43,8 @@ like a password store.
 | `ANTIGRAVITY_GEMINI_DIR` | Gemini data root (default `~/.gemini`) |
 | `ANTIGRAVITY_CLI_DIR` | agy data dir (default `<gemini>/antigravity-cli`) |
 | `ANTIGRAVITY_STORE_DIR` | agy slot dir |
+| `ANTIGRAVITY_KEYRING` | `0` disables OS Keychain/Keyring access (file only) |
+| `ANTIGRAVITY_SECRET_TOOL` | Linux `secret-tool` path for the alternate item (default: search `PATH`) |
 
 These make it safe to point agent-maid at a temp directory for experiments —
 prefer that over mutating the user's real accounts when testing.
@@ -70,15 +74,34 @@ prefer that over mutating the user's real accounts when testing.
   CLI switches immediately and reports `zcode_running`; the TUI can instead
   wait for exit (`--wait-apply`).
 
-### antigravity (agy)
+### antigravity (agy CLI / Desktop)
 
-- The credential is a single compact JSON file: `{token:{access_token,
-  token_type, refresh_token, expiry, expires_in}, auth_method, id_token_email}`.
-- agent-maid writes it back **byte-compatible with agy** — compact, no trailing
-  newline, `0600` — so a restored slot is indistinguishable from a fresh login.
+- New agy CLI and Antigravity Desktop share one OS Keychain/Keyring item
+  (`service=gemini`, `account=antigravity`). The legacy file
+  `~/.gemini/antigravity-cli/antigravity-oauth-token` (single compact JSON:
+  `{token:{access_token, token_type, refresh_token, expiry, expires_in},
+  auth_method, id_token_email}`) is still read and updated when present.
+- Linux also has agy builds that keep the same credential under the Secret
+  Service item `service=jetski-standalone-oauth-token`; agent-maid probes it
+  with `secret-tool` after the primary item.
+- Read order matches agy: `gemini/antigravity` → alternate Linux item → legacy
+  file. Write: update an existing alternate item (preserving its
+  label/username), then the primary item, then the legacy file only if it
+  already exists. If the keyring is unavailable (headless, no D-Bus, locked),
+  writes fall back to the file instead of failing the switch.
+- `ANTIGRAVITY_KEYRING=0` disables keyring access; `ANTIGRAVITY_SECRET_TOOL`
+  overrides the `secret-tool` path.
+- The legacy file is written back **byte-compatible with agy** — compact, no
+  trailing newline, `0600` — so a restored slot is indistinguishable from a
+  fresh login.
 - Email comes from `id_token_email`, falling back to the `id_token` JWT claim.
-- `logout` renames to `.antigravity-oauth-token.logged-out-<timestamp>`, exactly
-  like agy's own logout, so it is recoverable.
+- agy refreshes the access token hourly and rewrites `access_token`/`expiry`.
+  "In use" is matched by account identity (email + auth method, falling back to
+  `refresh_token`), and the in-use slot is synced to the latest credential, so
+  a refresh is not mistaken for a different account.
+- `logout` deletes the keyring items (when present) and renames the legacy file
+  to `.antigravity-oauth-token.logged-out-<timestamp>`, exactly like agy's own
+  logout, so it is recoverable.
 
 ## Repair recipes
 

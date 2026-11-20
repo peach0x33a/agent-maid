@@ -35,7 +35,7 @@ error. Text mode prints an aligned table.
 
 ### `current <target>`
 
-What the app is logged in as right now, read from the live credential file.
+What the app is logged in as right now, read from the live credential store.
 
 ```json
 {"type":"current","ok":true,"target":"antigravity",
@@ -43,14 +43,16 @@ What the app is logged in as right now, read from the live credential file.
  "refreshable":true,"expires_at":"2026-10-26T06:43:49+08:00",
  "expired":false,
  "path":"/root/.gemini/antigravity-cli/antigravity-oauth-token",
- "running":false}
+ "source":"file", "running":false}
 ```
 
 The result is wrapped: `{"type":"current","ok":true,"target":…,"current":{…}}`,
 and `current` is `null` when nothing is logged in.
 
 `exists:false` (with `path`) means not logged in — report that instead of
-treating it as a failure.
+treating it as a failure. For antigravity, `source` is `keyring` when agy is
+using the OS Keychain/Keyring and `file` when it fell back to the legacy token
+file; `path` is the legacy file path or the keyring item description.
 
 ### `use <target> <name> [--force]`
 

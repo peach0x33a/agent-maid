@@ -20,6 +20,7 @@ func setupIsolated(t *testing.T) string {
 	t.Setenv("ANTIGRAVITY_GEMINI_DIR", filepath.Join(base, "gemini"))
 	t.Setenv("ANTIGRAVITY_CLI_DIR", "")
 	t.Setenv("ANTIGRAVITY_STORE_DIR", filepath.Join(base, "slots"))
+	t.Setenv("ANTIGRAVITY_KEYRING", "0")
 	return base
 }
 
@@ -191,6 +192,85 @@ func TestApplyNoopWhenEqual(t *testing.T) {
 	}
 }
 
+// agy 每次续期都会改写 access_token/expiry:同一账号仍应算"正在使用",
+// 不能触发 auto-* 备份,也不能把旧 access_token 写回去。
+func TestSameAccountAfterRefresh(t *testing.T) {
+	setupIsolated(t)
+	svc := New()
+	exp := time.Now().Add(time.Hour).Round(time.Second)
+	writeTokenFile(t, tokenDocFor("access-old", "refresh-A", "a@example.com", exp))
+	if _, err := svc.SaveCurrent("work", false); err != nil {
+		t.Fatal(err)
+	}
+
+	// agy 续期:refresh_token 与邮箱不变,access_token/expiry 变化
+	exp = exp.Add(time.Hour)
+	writeTokenFile(t, tokenDocFor("access-new", "refresh-A", "a@example.com", exp))
+
+	if !svc.CurrentCovered() {
+		t.Fatal("续期后的当前账号仍应被槽位覆盖")
+	}
+	backup, err := svc.Apply("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backup != "" {
+		t.Fatalf("同一账号续期不应自动备份,得到 %q", backup)
+	}
+	tok, err := ReadToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(tok), "access-new") {
+		t.Fatalf("切回应保留 agy 刷新后的最新凭据,得到 %s", tok)
+	}
+
+	// 槽位本身也应被同步成最新凭据(界面才能标"使用中")
+	slot, err := svc.Store.Get("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(slot.Token), "access-new") {
+		t.Fatalf("槽位未同步到刷新后的凭据: %s", slot.Token)
+	}
+}
+
+// Service.List 读取槽位时把当前账号的槽位同步为 agy 最新凭据。
+func TestListSyncsRefreshedSlot(t *testing.T) {
+	setupIsolated(t)
+	svc := New()
+	exp := time.Now().Add(time.Hour).Round(time.Second)
+	writeTokenFile(t, tokenDocFor("access-1", "rt-A", "a@example.com", exp))
+	if _, err := svc.SaveCurrent("work", false); err != nil {
+		t.Fatal(err)
+	}
+	writeTokenFile(t, tokenDocFor("access-2", "rt-A", "a@example.com", exp.Add(time.Hour)))
+
+	slots, err := svc.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(slots) != 1 || !strings.Contains(string(slots[0].Token), "access-2") {
+		t.Fatalf("List 应返回同步后的槽位,得到 %+v", slots)
+	}
+	saved, err := svc.Store.Get("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(saved.Token), "access-2") {
+		t.Fatalf("同步结果应落盘,得到 %s", saved.Token)
+	}
+}
+
+// 不同邮箱(哪怕 refresh_token 恰好相同)不是同一个账号。
+func TestSameAccountDifferentEmail(t *testing.T) {
+	a := Token(`{"token":{"refresh_token":"rt"},"id_token_email":"a@example.com"}`)
+	b := Token(`{"token":{"refresh_token":"rt"},"id_token_email":"b@example.com"}`)
+	if SameAccount(a, b) {
+		t.Fatal("不同邮箱不应判为同一账号")
+	}
+}
+
 // 未登录时保存要给出可执行的提示,而不是底层文件错误。
 func TestSaveCurrentWithoutLogin(t *testing.T) {
 	setupIsolated(t)
@@ -285,6 +365,9 @@ func setupMockKeyring(t *testing.T) {
 	setupIsolated(t)
 	keyring.MockInit()
 	t.Setenv("ANTIGRAVITY_KEYRING", "on")
+	// 隔离 Linux 上另一套 Secret Service 探测,避免碰真实钥匙串。
+	t.Setenv("ANTIGRAVITY_SECRET_TOOL", filepath.Join(t.TempDir(), "missing-secret-tool"))
+	markKeyringUsable()
 }
 
 // Keyring 模式下读写、切换、登出都应通过 Keyring(gemini/antigravity),
@@ -349,6 +432,9 @@ func TestIsAntigravityProc(t *testing.T) {
 		{[]string{"/Applications/Antigravity.app/Contents/MacOS/Antigravity"}, true},
 		{[]string{"/Applications/Antigravity.app/Contents/Frameworks/Antigravity Helper.app/Contents/MacOS/Antigravity Helper"}, true},
 		{[]string{"/Applications/Antigravity.app/Contents/Resources/bin/language_server", "--override_ide_name", "antigravity"}, true},
+		{[]string{"/root/.gemini/antigravity-cli/bin/agentapi", "serve"}, true},
+		{[]string{"/opt/agy/agy-node", "--bridge"}, true},
+		{[]string{"/usr/lib/jetski-language-server"}, true},
 		{[]string{"/usr/local/bin/language_server", "--other"}, false},
 		{[]string{"agent-maid", "antigravity"}, false},
 		{[]string{"codex"}, false},
