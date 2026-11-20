@@ -309,11 +309,11 @@ func agyList(env Env) int {
 			Current string     `json:"current,omitempty"`
 			Running bool       `json:"running"`
 			Path    string     `json:"path"`
-		}{payload{"list", true, ""}, "antigravity", len(views), views, current.Email, antigravity.Running(), antigravity.TokenPath()})
+		}{payload{"list", true, ""}, "antigravity", len(views), views, current.Email, antigravity.Running(), antigravity.CredentialLocation()})
 		return CodeOK
 	}
 	if len(views) == 0 {
-		fmt.Fprintln(env.Stdout, "槽位为空。先在 agy 里登录,再 `agent-maid save antigravity <名称>` 保存。")
+		fmt.Fprintln(env.Stdout, "槽位为空。先在 agy CLI 或 Antigravity Desktop 里登录,再 `agent-maid save antigravity <名称>` 保存。")
 		return CodeOK
 	}
 	rows := make([][]string, 0, len(views))
@@ -352,12 +352,12 @@ func agyCurrent(env Env) int {
 		}{
 			payload{"current", true, ""}, "antigravity", current.Exists, current.Email, current.AuthMode,
 			current.State.Refreshable, shortTime(current.State.ExpiresAt),
-			current.State.Expired(nowLocal()), antigravity.TokenPath(), antigravity.Running(),
+			current.State.Expired(nowLocal()), antigravity.CredentialLocation(), antigravity.Running(),
 		})
 		return CodeOK
 	}
 	if !current.Exists {
-		fmt.Fprintf(env.Stdout, "当前未登录 agy(%s 不存在)\n", antigravity.TokenPath())
+		fmt.Fprintf(env.Stdout, "当前未登录 Antigravity(%s 不存在)\n", antigravity.CredentialLocation())
 		return CodeOK
 	}
 	fmt.Fprintf(env.Stdout, "邮箱:     %s\n", orDash(current.Email))
@@ -366,9 +366,9 @@ func agyCurrent(env Env) int {
 		fmt.Fprintf(env.Stdout, "有效期至: %s\n", shortTime(current.State.ExpiresAt))
 	}
 	if !current.State.Refreshable {
-		fmt.Fprintln(env.Stdout, "注意: 凭据没有 refresh_token,过期后需在 agy 重新登录")
+		fmt.Fprintln(env.Stdout, "注意: 凭据没有 refresh_token,过期后需在 agy / Antigravity Desktop 重新登录")
 	}
-	fmt.Fprintf(env.Stdout, "文件:     %s\n", antigravity.TokenPath())
+	fmt.Fprintf(env.Stdout, "凭据:     %s\n", antigravity.CredentialLocation())
 	return CodeOK
 }
 
@@ -403,7 +403,7 @@ func agyUse(env Env, name string) int {
 	}
 	fmt.Fprintln(env.Stdout)
 	if running {
-		fmt.Fprintln(env.Stdout, "注意: agy 正在运行,退出前可能把凭据回写覆盖,建议重启 agy。")
+		fmt.Fprintln(env.Stdout, "注意: Antigravity(CLI/Desktop)正在运行,退出前可能把凭据回写覆盖,建议重启。")
 	}
 	return CodeOK
 }
@@ -411,7 +411,7 @@ func agyUse(env Env, name string) int {
 func agySave(env Env, name string) int {
 	svc := antigravity.New()
 	if !svc.Current().Exists {
-		return env.fail(CodeFailure, "没有找到 "+antigravity.TokenPath()+",请先在 agy 里登录", "")
+		return env.fail(CodeFailure, "没有找到 "+antigravity.CredentialLocation()+",请先在 agy CLI 或 Antigravity Desktop 里登录", "")
 	}
 	slot, err := svc.SaveCurrent(name, false)
 	if err != nil {

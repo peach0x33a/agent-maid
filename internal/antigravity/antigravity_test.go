@@ -3,11 +3,14 @@ package antigravity
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zalando/go-keyring"
 )
 
 // setupIsolated 把 gemini 数据目录、agy 数据目录与槽位目录都指到临时目录。
@@ -274,5 +277,85 @@ func TestSlotStoresRawToken(t *testing.T) {
 	}
 	if _, ok := slot["authMethod"]; !ok {
 		t.Fatalf("槽位应记录 authMethod: %s", raw)
+	}
+}
+
+func setupMockKeyring(t *testing.T) {
+	t.Helper()
+	setupIsolated(t)
+	keyring.MockInit()
+	t.Setenv("ANTIGRAVITY_KEYRING", "on")
+}
+
+// Keyring 模式下读写、切换、登出都应通过 Keyring(gemini/antigravity),
+// 且不应凭空创建旧版凭据文件。
+func TestKeyringRoundtripAndLegacyFallback(t *testing.T) {
+	setupMockKeyring(t)
+
+	// 初始为空
+	if _, err := ReadToken(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("空 Keyring 应返回 os.ErrNotExist,得到 %v", err)
+	}
+
+	// 若旧版文件存在而 Keyring 为空,ReadToken 应向后兼容读取旧版文件
+	writeTokenFile(t, tokenDocFor("legacy-at", "legacy-rt", "legacy@example.com", time.Now().Add(time.Hour)))
+	tok, err := ReadToken()
+	if err != nil {
+		t.Fatalf("回退读取旧版文件失败: %v", err)
+	}
+	if TokenEmail(tok) != "legacy@example.com" {
+		t.Fatalf("回退邮箱 = %q, 期望 legacy@example.com", TokenEmail(tok))
+	}
+
+	// 清理后测试纯 Keyring 写入(不创建旧版文件)
+	if err := ClearToken(); err != nil {
+		t.Fatalf("ClearToken: %v", err)
+	}
+	if _, err := os.Stat(TokenPath()); !os.IsNotExist(err) {
+		t.Fatal("ClearToken 后旧版文件应已改名")
+	}
+
+	raw, _ := json.Marshal(tokenDocFor("kr-at", "kr-rt", "kr@example.com", time.Now().Add(time.Hour)))
+	if err := WriteToken(raw); err != nil {
+		t.Fatalf("WriteToken(keyring): %v", err)
+	}
+	if _, err := os.Stat(TokenPath()); !os.IsNotExist(err) {
+		t.Fatal("Keyring 模式下不应凭空创建旧版凭据文件")
+	}
+	got, err := ReadToken()
+	if err != nil {
+		t.Fatalf("ReadToken(keyring): %v", err)
+	}
+	if TokenEmail(got) != "kr@example.com" || !strings.Contains(string(got), "kr-at") {
+		t.Fatalf("Keyring 读回凭据不对: %s", got)
+	}
+
+	// ClearToken 应清空 Keyring
+	if err := ClearToken(); err != nil {
+		t.Fatalf("ClearToken(keyring): %v", err)
+	}
+	if _, err := ReadToken(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ClearToken 后应返回 os.ErrNotExist,得到 %v", err)
+	}
+}
+
+func TestIsAntigravityProc(t *testing.T) {
+	cases := []struct {
+		argv []string
+		want bool
+	}{
+		{[]string{"agy"}, true},
+		{[]string{"/Users/u/.local/bin/agy", "--help"}, true},
+		{[]string{"/Applications/Antigravity.app/Contents/MacOS/Antigravity"}, true},
+		{[]string{"/Applications/Antigravity.app/Contents/Frameworks/Antigravity Helper.app/Contents/MacOS/Antigravity Helper"}, true},
+		{[]string{"/Applications/Antigravity.app/Contents/Resources/bin/language_server", "--override_ide_name", "antigravity"}, true},
+		{[]string{"/usr/local/bin/language_server", "--other"}, false},
+		{[]string{"agent-maid", "antigravity"}, false},
+		{[]string{"codex"}, false},
+	}
+	for _, tc := range cases {
+		if got := isAntigravityProc(tc.argv); got != tc.want {
+			t.Errorf("isAntigravityProc(%v) = %v, want %v", tc.argv, got, tc.want)
+		}
 	}
 }

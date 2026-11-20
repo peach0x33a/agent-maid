@@ -1,5 +1,5 @@
-// agy 进程检测:agy 运行中时切换凭据可能被其退出前的凭据回写覆盖,
-// 界面据此提示/等待。
+// Antigravity 进程检测:agy CLI 或 Antigravity Desktop 运行中时切换凭据
+// 可能被其退出前/续期时的凭据回写覆盖,界面据此提示/等待。
 package antigravity
 
 import (
@@ -9,16 +9,18 @@ import (
 	"agent-maid/internal/procscan"
 )
 
-// Proc 一个检测到的 agy 相关进程。
+// Proc 一个检测到的 Antigravity 相关进程。
 type Proc = procscan.Proc
 
-// Procs 返回运行中的 agy 相关进程(排除本工具自身)。
+// Procs 返回运行中的 Antigravity(agy CLI / Desktop)相关进程(排除本工具自身)。
 func Procs() []Proc {
 	return procscan.Find(isAntigravityProc)
 }
 
-// isAntigravityProc 按 argv 判断是否 agy 相关进程:主程序名为 agy,
-// 部分安装是 antigravity / antigravity-cli 的软链或副本。
+// isAntigravityProc 按 argv 判断是否 Antigravity 相关进程:
+// - agy CLI: agy / antigravity-cli
+// - Antigravity Desktop: Antigravity / Antigravity Helper*
+// - 共用的 language_server(--override_ide_name antigravity / --app_data_dir antigravity)
 func isAntigravityProc(argv []string) bool {
 	for _, a := range argv {
 		if strings.Contains(a, "agent-maid") {
@@ -28,15 +30,23 @@ func isAntigravityProc(argv []string) bool {
 	if len(argv) == 0 {
 		return false
 	}
-	base := strings.ToLower(filepath.Base(argv[0]))
+	base := strings.TrimSuffix(strings.ToLower(filepath.Base(argv[0])), ".exe")
 	switch base {
 	case "agy", "antigravity", "antigravity-cli":
 		return true
+	case "language_server":
+		for _, a := range argv[1:] {
+			if strings.EqualFold(a, "antigravity") {
+				return true
+			}
+		}
+		return false
 	}
-	// agy 的辅助进程/挂载点(antigravity-cli/bin/agentapi 之类)
+	// 辅助进程/桌面端 Helper(如 antigravity-cli/bin/agentapi, Antigravity Helper)
 	return strings.HasPrefix(base, "antigravity-cli") ||
-		strings.HasPrefix(base, "antigravity-")
+		strings.HasPrefix(base, "antigravity-") ||
+		strings.HasPrefix(base, "antigravity ")
 }
 
-// Running 是否有 agy 进程在运行。
+// Running 是否有 Antigravity 进程(agy CLI 或 Desktop)在运行。
 func Running() bool { return len(Procs()) > 0 }

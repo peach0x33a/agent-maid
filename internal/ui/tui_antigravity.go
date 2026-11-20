@@ -19,8 +19,8 @@ import (
 var ainfo = targetInfo{
 	Key:      "antigravity",
 	Name:     "Antigravity",
-	Desc:     "agy CLI 账号切换",
-	Path:     "~/.gemini/antigravity-cli/antigravity-oauth-token",
+	Desc:     "agy CLI / Desktop 账号切换",
+	Path:     antigravity.CredentialLocation(),
 	pxLarge:  antigravityPxLarge,
 	pxSmall:  antigravityPxSmall,
 	colLarge: antigravityColLarge,
@@ -648,7 +648,7 @@ func aInfoView(m AntigravityModel) string {
 	lines := []string{
 		styleTitle.Render("信息"),
 		styleDim.Render("agy 数据目录: ") + val.Render(antigravity.CLIDir()),
-		styleDim.Render("登录凭据:     ") + val.Render(antigravity.TokenPath()),
+		styleDim.Render("登录凭据:     ") + val.Render(antigravity.CredentialLocation()),
 	}
 	parts := strings.Split(current, "\n")
 	lines = append(lines, styleDim.Render("当前账号:     ")+parts[0])
@@ -656,7 +656,7 @@ func aInfoView(m AntigravityModel) string {
 		lines = append(lines, strings.Repeat(" ", len("当前账号:     "))+extra)
 	}
 	lines = append(lines,
-		styleDim.Render("agy:          ")+run,
+		styleDim.Render("CLI/Desktop:  ")+run,
 		styleDim.Render("槽位:         ")+val.Render(antigravity.DefaultDir())+
 			accentSt.Render(fmt.Sprintf("  %d 个", len(m.slots))),
 		"",
@@ -681,6 +681,6 @@ func aHelpView(width int) string {
 		{"q / Q / Ctrl+C", "退出"},
 	}, []string{
 		styleDim.Render("槽位存储位置:" + antigravity.DefaultDir()),
-		styleDim.Render("agy 凭据文件:" + antigravity.TokenPath()),
+		styleDim.Render("Antigravity 凭据:" + antigravity.CredentialLocation()),
 	}, width)
 }

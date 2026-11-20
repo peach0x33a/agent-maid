@@ -1,8 +1,7 @@
-// Package antigravity 封装 agy(Antigravity CLI)的登录凭据与账号切换。
+// Package antigravity 封装 Antigravity(agy CLI 与 Antigravity Desktop)的登录凭据与账号切换。
 //
-// agy 把登录凭据放在单个 JSON 文件里(0600,紧凑单行):
-//
-//	~/.gemini/antigravity-cli/antigravity-oauth-token
+// 新版 agy CLI 与 Antigravity Desktop 共用同一份 OS Keychain/Keyring 凭据
+// (go-keyring: service="gemini", account="antigravity"),内容为单个 JSON 对象:
 //
 //	{
 //	  "token": {"access_token":"...", "token_type":"Bearer",
@@ -12,8 +11,11 @@
 //	  "id_token_email": "user@example.com"
 //	}
 //
-// 槽位保存的是该文件的原文 JSON 快照,切换即原子写回——与 ZCode 槽位同一
-// 思路:不解密、不联网、不刷新 token(过期后由 agy 自己用 refresh_token 续期)。
+// 旧版 agy CLI 曾将同一份 JSON 存放在 ~/.gemini/antigravity-cli/antigravity-oauth-token,
+// 本包在读取时保留对该文件的向后兼容。
+//
+// 槽位保存的是该凭据的原文 JSON 快照,切换即原子写回——与 ZCode 槽位同一
+// 思路:不解密、不联网、不刷新 token(过期后由 Antigravity 自己用 refresh_token 续期)。
 package antigravity
 
 import (
@@ -24,18 +26,77 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
+
+	"github.com/zalando/go-keyring"
 
 	"agent-maid/internal/atomicio"
 )
 
-// Token 是 antigravity-oauth-token 文件的原文 JSON 对象。保留原文而不是
-// 结构体,是为了不丢掉 agy 后续版本可能新增的字段。
+// Token 是 Antigravity 凭据的原文 JSON 对象。保留原文而不是
+// 结构体,是为了不丢掉后续版本可能新增的字段。
 type Token = json.RawMessage
 
-// tokenFileName agy 的凭据文件名(登出时它会在前面加点并追加 .logged-out-<ts>)。
-const tokenFileName = "antigravity-oauth-token"
+const (
+	// tokenFileName 旧版 agy 的凭据文件名(登出时它会在前面加点并追加 .logged-out-<ts>)。
+	tokenFileName = "antigravity-oauth-token"
+
+	// keyringService / keyringAccount 是新版 agy CLI 与 Antigravity Desktop
+	// 共用的 OS Keyring 凭据键名(由 zalando/go-keyring 写入)。
+	keyringService = "gemini"
+	keyringAccount = "antigravity"
+)
+
+type keyringStore interface {
+	Get(service, user string) (string, error)
+	Set(service, user, password string) error
+	Delete(service, user string) error
+}
+
+type osKeyring struct{}
+
+func (osKeyring) Get(service, user string) (string, error) {
+	return keyring.Get(service, user)
+}
+
+func (osKeyring) Set(service, user, password string) error {
+	return keyring.Set(service, user, password)
+}
+
+func (osKeyring) Delete(service, user string) error {
+	return keyring.Delete(service, user)
+}
+
+var kr keyringStore = osKeyring{}
+
+// useKeyring 判断当前是否应使用 macOS Keychain 读写凭据。
+// 仅 macOS 上最新版 agy CLI 与 Antigravity Desktop 共用 Keychain;
+// 其他平台继续使用 ~/.gemini/antigravity-cli/antigravity-oauth-token 文件。
+// 当测试或用户显式覆盖了 ANTIGRAVITY_GEMINI_DIR / ANTIGRAVITY_CLI_DIR 时,
+// 默认回退到文件模式,避免测试污染宿主机的真实 Keychain。
+func useKeyring() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("ANTIGRAVITY_KEYRING"))) {
+	case "off", "false", "0", "file":
+		return false
+	case "on", "true", "1":
+		return true
+	}
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	return strings.TrimSpace(os.Getenv("ANTIGRAVITY_GEMINI_DIR")) == "" &&
+		strings.TrimSpace(os.Getenv("ANTIGRAVITY_CLI_DIR")) == ""
+}
+
+// CredentialLocation 返回当前生效的凭据存储位置描述(用于展示与提示)。
+func CredentialLocation() string {
+	if useKeyring() {
+		return fmt.Sprintf("Keychain (%s/%s)", keyringService, keyringAccount)
+	}
+	return TokenPath()
+}
 
 // GeminiDir 返回 gemini 生态数据目录(默认 ~/.gemini)。
 func GeminiDir() string {
@@ -60,46 +121,95 @@ func CLIDir() string {
 // TokenPath 返回 agy 登录凭据文件的完整路径。
 func TokenPath() string { return filepath.Join(CLIDir(), tokenFileName) }
 
-// ReadToken 读取 agy 的凭据文件。文件缺失时返回 os.ErrNotExist 包装错误。
-func ReadToken() (Token, error) {
-	data, err := os.ReadFile(TokenPath())
-	if err != nil {
-		return nil, err
-	}
+// parseTokenJSON 校验凭据字节是否为合法的 JSON 对象。
+func parseTokenJSON(data []byte, source string) (Token, error) {
 	data = bytes.TrimSpace(data)
 	if len(data) == 0 {
-		return nil, fmt.Errorf("%s 是空文件", TokenPath())
+		return nil, fmt.Errorf("%s 为空", source)
 	}
 	if !json.Valid(data) {
-		return nil, fmt.Errorf("%s 不是合法 JSON", TokenPath())
+		return nil, fmt.Errorf("%s 不是合法 JSON", source)
 	}
 	var probe map[string]any
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return nil, fmt.Errorf("%s 不是 JSON 对象: %w", TokenPath(), err)
+		return nil, fmt.Errorf("%s 不是 JSON 对象: %w", source, err)
 	}
 	return Token(data), nil
 }
 
-// WriteToken 原子写回凭据文件,保持 0600 与 agy 自己的紧凑单行格式。
-func WriteToken(tok Token) error {
+// compactTokenJSON 校验并压缩凭据为紧凑单行 JSON。
+func compactTokenJSON(tok Token) ([]byte, error) {
 	if len(bytes.TrimSpace(tok)) == 0 {
-		return errors.New("凭据内容为空")
+		return nil, errors.New("凭据内容为空")
 	}
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, tok); err != nil {
-		return fmt.Errorf("凭据不是合法 JSON: %w", err)
+		return nil, fmt.Errorf("凭据不是合法 JSON: %w", err)
 	}
 	var probe map[string]any
 	if err := json.Unmarshal(compact.Bytes(), &probe); err != nil {
-		return fmt.Errorf("凭据不是 JSON 对象: %w", err)
+		return nil, fmt.Errorf("凭据不是 JSON 对象: %w", err)
 	}
-	return atomicio.WriteFile(TokenPath(), compact.Bytes(), 0o600)
+	return compact.Bytes(), nil
 }
 
-// ClearToken 让 agy 回到未登录态。与 agy 自身的登出一致:把文件改名成
-// .antigravity-oauth-token.logged-out-<时间> 而不是直接删掉,这样误登出时
-// 凭据还在原地可找回。文件不存在时静默。
+func readTokenFile() (Token, error) {
+	data, err := os.ReadFile(TokenPath())
+	if err != nil {
+		return nil, err
+	}
+	return parseTokenJSON(data, TokenPath())
+}
+
+// ReadToken 读取 Antigravity 凭据。
+// 优先读取 OS Keyring(新版 agy CLI 与 Antigravity Desktop 共用),
+// 若 Keyring 未找到则回退到旧版凭据文件;都不存在时返回 os.ErrNotExist。
+func ReadToken() (Token, error) {
+	if useKeyring() {
+		raw, err := kr.Get(keyringService, keyringAccount)
+		if err == nil {
+			return parseTokenJSON([]byte(raw), CredentialLocation())
+		}
+		if tok, fileErr := readTokenFile(); fileErr == nil {
+			return tok, nil
+		}
+		if errors.Is(err, keyring.ErrNotFound) {
+			return nil, os.ErrNotExist
+		}
+		return nil, fmt.Errorf("读取 %s 失败: %w", CredentialLocation(), err)
+	}
+	return readTokenFile()
+}
+
+// WriteToken 写回凭据。在 Keyring 模式下写入 OS Keyring(若旧版凭据文件
+// 已存在则同步更新,避免版本混用时读到旧凭据);文件模式下原子写回 0600 文件。
+func WriteToken(tok Token) error {
+	compact, err := compactTokenJSON(tok)
+	if err != nil {
+		return err
+	}
+	if useKeyring() {
+		if err := kr.Set(keyringService, keyringAccount, string(compact)); err != nil {
+			return fmt.Errorf("写入 %s 失败: %w", CredentialLocation(), err)
+		}
+		if _, err := os.Stat(TokenPath()); err == nil {
+			if err := atomicio.WriteFile(TokenPath(), compact, 0o600); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return atomicio.WriteFile(TokenPath(), compact, 0o600)
+}
+
+// ClearToken 让 Antigravity 回到未登录态:清空 OS Keyring 凭据,并把旧版
+// 凭据文件(若存在)改名成 .antigravity-oauth-token.logged-out-<时间> 保留。
 func ClearToken() error {
+	if useKeyring() {
+		if err := kr.Delete(keyringService, keyringAccount); err != nil && !errors.Is(err, keyring.ErrNotFound) {
+			return fmt.Errorf("清除 %s 失败: %w", CredentialLocation(), err)
+		}
+	}
 	path := TokenPath()
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {

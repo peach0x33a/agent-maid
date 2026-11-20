@@ -50,7 +50,7 @@ func (s *Service) SaveCurrent(name string, allowOverwrite bool) (Slot, error) {
 	tok, err := ReadToken()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Slot{}, fmt.Errorf("没有找到 %s,请先在 agy 里登录", TokenPath())
+			return Slot{}, fmt.Errorf("没有找到 %s,请先在 agy 里登录(CLI 或 Desktop)", CredentialLocation())
 		}
 		return Slot{}, fmt.Errorf("读取凭据失败: %w", err)
 	}
