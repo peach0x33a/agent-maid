@@ -178,16 +178,17 @@ func ReadTokenWithSource() (Token, string, error) {
 		if tok, ok := readKeyringToken(); ok {
 			return tok, SourceKeyring, nil
 		}
-		if tok, fileErr := readTokenFile(); fileErr == nil {
+		tok, fileErr := readTokenFile()
+		if fileErr == nil {
 			return tok, SourceFile, nil
 		}
 		if parseErr != nil {
 			return nil, "", parseErr
 		}
-		if keyErr == nil || errors.Is(keyErr, keyring.ErrNotFound) {
-			return nil, "", os.ErrNotExist
-		}
-		return nil, "", fmt.Errorf("读取 %s 失败: %w", CredentialLocation(), keyErr)
+		// 钥匙串无条目或不可用(headless / 无 D-Bus / 被锁定等)时,
+		// 与 WriteToken / ClearToken 一致回落按文件结果处理:
+		// 文件不存在即返回 os.ErrNotExist(未登录),文件损坏则返回其解析错误。
+		return nil, "", fileErr
 	}
 	tok, err := readTokenFile()
 	if err != nil {

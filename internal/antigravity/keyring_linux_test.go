@@ -301,8 +301,16 @@ func TestKeyringUnavailableFallsBackFile(t *testing.T) {
 	t.Cleanup(func() { kr = prev })
 
 	tok := `{"token":{"access_token":"file-only"},"id_token_email":"file@example.com"}`
-	if err := WriteToken(Token(tok)); err != nil {
-		t.Fatalf("钥匙串不可用时 WriteToken 应回落文件: %v", err)
+	if _, err := ReadToken(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("钥匙串不可用且无文件时 ReadToken 应返回 os.ErrNotExist,得到 %v", err)
+	}
+
+	svc := New()
+	if _, err := svc.Store.Save("slot-a", Slot{Email: "file@example.com", Token: Token(tok)}); err != nil {
+		t.Fatalf("Save slot: %v", err)
+	}
+	if _, err := svc.Apply("slot-a"); err != nil {
+		t.Fatalf("钥匙串不可用且未登录时 Apply 应回落写入文件: %v", err)
 	}
 	raw, err := os.ReadFile(TokenPath())
 	if err != nil || !strings.Contains(string(raw), "file-only") {
@@ -313,6 +321,12 @@ func TestKeyringUnavailableFallsBackFile(t *testing.T) {
 	}
 	if _, err := os.Stat(TokenPath()); !os.IsNotExist(err) {
 		t.Fatal("登出后文件应已改名")
+	}
+	if _, err := ReadToken(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("登出后 ReadToken 应返回 os.ErrNotExist,得到 %v", err)
+	}
+	if svc.Current().LoggedOut == "" {
+		t.Fatal("登出后 Current().LoggedOut 应识别备份文件")
 	}
 }
 

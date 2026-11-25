@@ -422,6 +422,55 @@ func TestKeyringRoundtripAndLegacyFallback(t *testing.T) {
 	}
 }
 
+type unactivatableKeyring struct{}
+
+func (unactivatableKeyring) Get(string, string) (string, error) {
+	return "", errors.New("The name is not activatable")
+}
+func (unactivatableKeyring) Set(string, string, string) error {
+	return errors.New("The name is not activatable")
+}
+func (unactivatableKeyring) Delete(string, string) error {
+	return errors.New("The name is not activatable")
+}
+
+// Headless Linux 等无 Secret Service 环境(go-keyring 返回 "The name is not activatable")
+// 且当前未登录(无凭据文件)时,ReadToken 应视同 os.ErrNotExist,Apply 应直接回落写入文件。
+func TestKeyringUnactivatableApplyFromLoggedOut(t *testing.T) {
+	setupMockKeyring(t)
+	prev := kr
+	kr = unactivatableKeyring{}
+	t.Cleanup(func() { kr = prev })
+
+	if _, err := ReadToken(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("钥匙串不可用且未登录时 ReadToken 应返回 os.ErrNotExist,得到 %v", err)
+	}
+
+	svc := New()
+	raw, _ := json.Marshal(tokenDocFor("hl-at", "hl-rt", "iroha@example.com", time.Now().Add(time.Hour)))
+	if _, err := svc.Store.Save("iroha", Slot{Email: "iroha@example.com", Token: raw}); err != nil {
+		t.Fatalf("Save slot: %v", err)
+	}
+	if _, err := svc.Apply("iroha"); err != nil {
+		t.Fatalf("未登录态切换槽位失败: %v", err)
+	}
+
+	got, source, err := ReadTokenWithSource()
+	if err != nil {
+		t.Fatalf("切换后 ReadTokenWithSource 失败: %v", err)
+	}
+	if source != SourceFile || TokenEmail(got) != "iroha@example.com" {
+		t.Fatalf("切换后读取结果 = (%q, %q), 期望 (file, iroha@example.com)", source, TokenEmail(got))
+	}
+
+	if err := ClearToken(); err != nil {
+		t.Fatalf("ClearToken: %v", err)
+	}
+	if cur := svc.Current(); cur.Exists || cur.LoggedOut == "" {
+		t.Fatalf("登出后 Current = %+v, 期望未登录且记录 LoggedOut 备份", cur)
+	}
+}
+
 func TestIsAntigravityProc(t *testing.T) {
 	cases := []struct {
 		argv []string
